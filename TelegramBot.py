@@ -2653,9 +2653,17 @@ active_send_tasks = set()  # 活跃的图片发送任务集合
 recent_payback_records = dict()  # 近期代付操作记录：{键: 时间戳}
 recent_cd_responses = dict()  # 近期查单回复记录：{键: 时间戳}
 
-# 新增优化相关变量
-cache_lock = asyncio.Lock()  # 缓存操作锁
-CACHE_EXPIRE_SECONDS = 3600  # 缓存过期时间(1小时)
+# ---------------------------- 缓存过期时间配置（分类管理，避免内存溢出） ----------------------------
+# 缓存操作锁
+cache_lock = asyncio.Lock()
+
+# 代付操作记录缓存过期时间（建议30-60秒，用于防止重复触发）
+PAYBACK_RECORD_EXPIRE_SECONDS = 60
+
+# 图片缓存过期时间（建议30-60秒，用于临时存储待发送的图片）
+IMAGE_CACHE_EXPIRE_SECONDS = 60
+
+# 黑名单缓存配置
 blacklist_cache = set()      # 黑词缓存集合
 blacklist_last_refresh = 0   # 黑词缓存最后刷新时间戳
 BLACKLIST_REFRESH_INTERVAL = 300  # 黑词缓存刷新间隔（秒）
@@ -2679,18 +2687,28 @@ _instruction_map = {
     "撤回": "代付撤单",
 }
 
-# 新增：定时清理过期缓存的任务
-async def clean_expired_cache():
-    """定期清理过期缓存，防止内存溢出"""
+# ---------------------------- 代付操作缓存定期清理任务 ----------------------------
+async def clean_expired_payback_cache():
+    """
+    定期清理过期的代付操作记录和图片缓存，防止内存溢出
+    
+    清理策略：
+    - 代付操作记录：60秒后过期（用于防止重复触发）
+    - 图片缓存：60秒后过期（用于临时存储待发送的图片）
+    - 执行周期：每60秒清理一次
+    """
     while True:
         try:
             current_time = monotonic()
             async with cache_lock:
-                # 清理过期的代付操作记录
-                expired_keys = [
-                    key for key, timestamp in recent_payback_records.items()
-                    if current_time - timestamp > CACHE_EXPIRE_SECONDS
-                ]
+                # 清理过期的代付操作记录（仅清理时间戳类型的记录）
+                expired_keys = []
+                for key, value in recent_payback_records.items():
+                    # 只清理值为时间戳的记录（float/int类型）
+                    if isinstance(value, (int, float)):
+                        if current_time - value > PAYBACK_RECORD_EXPIRE_SECONDS:
+                            expired_keys.append(key)
+                
                 for key in expired_keys:
                     del recent_payback_records[key]
                 
@@ -2698,14 +2716,25 @@ async def clean_expired_cache():
                 expired_tip_ids = []
                 for tip_id in pending_images:
                     create_time = recent_payback_records.get((tip_id, "create_time"), 0)
-                    if current_time - create_time > CACHE_EXPIRE_SECONDS:
+                    if create_time > 0 and current_time - create_time > IMAGE_CACHE_EXPIRE_SECONDS:
                         expired_tip_ids.append(tip_id)
                 
                 for tip_id in expired_tip_ids:
+                    # 清理图片缓存及相关元数据
                     del pending_images[tip_id]
+                    recent_payback_records.pop((tip_id, "orders"), None)
+                    recent_payback_records.pop((tip_id, "order"), None)
+                    recent_payback_records.pop((tip_id, "group"), None)
+                    recent_payback_records.pop((tip_id, "first_trigger_msg_id"), None)
+                    recent_payback_records.pop((tip_id, "is_bot_sender"), None)
+                    recent_payback_records.pop((tip_id, "create_time"), None)
+                
+                # 日志输出清理结果（仅在有清理时输出）
+                if expired_keys or expired_tip_ids:
+                    logger.debug(f"[缓存清理] 代付记录: {len(expired_keys)}条, 图片缓存: {len(expired_tip_ids)}个")
             
-            # 每小时清理一次
-            await asyncio.sleep(3600)
+            # 每60秒清理一次
+            await asyncio.sleep(60)
         except Exception as e:
             logger.error(f"[代付] 缓存清理任务失败: {e}")
             await asyncio.sleep(60)  # 出错后缩短间隔重试
@@ -6198,10 +6227,16 @@ CREDENTIALS_FILES = {
 # 数据库配置
 DB_PATH = "database.db"
 
-# 缓存配置
-CACHE_EXPIRE_SECONDS = 30  # 缓存过期时间(秒)
-_pdf_text_cache = {}  # 全局PDF文本缓存
-TASK_CACHE = {}  # 任务状态缓存：存储任务哈希及状态
+# ---------------------------- 回单查询缓存配置（分类管理） ----------------------------
+# 任务状态缓存过期时间（建议5-10分钟，用于防止重复任务）
+TASK_CACHE_EXPIRE_SECONDS = 600  # 10分钟
+
+# PDF文本缓存过期时间（建议24小时，用于避免重复解析PDF）
+PDF_CACHE_EXPIRE_SECONDS = 86400  # 24小时
+
+# 缓存存储
+_pdf_text_cache = {}  # 全局PDF文本缓存：{文件路径: {'data': 文本内容, 'timestamp': 时间戳}}
+TASK_CACHE = {}  # 任务状态缓存：{任务哈希: {'status': 状态, 'timestamp': 时间戳, 'result': 结果, 'has_result': 是否有结果}}
 
 # 连接池配置
 GMAIL_SERVICE_POOL = {
@@ -7534,31 +7569,56 @@ def generate_task_hash(payer_name, payee_name, count, email_type=None):
     task_str = f"{norm_email_type}|{norm_payer}|{norm_payee}|{count}"
     return hashlib.md5(task_str.encode()).hexdigest()
 
-async def clean_expired_cache():
-    """清理过期缓存"""
-    now = time.time()
-    expired_hashes = [
-        task_hash for task_hash, data in TASK_CACHE.items()
-        if now - data["timestamp"] > CACHE_EXPIRE_SECONDS
-    ]
-    for task_hash in expired_hashes:
-        del TASK_CACHE[task_hash]
+async def clean_expired_task_cache():
+    """
+    清理过期的任务缓存
+    
+    清理策略：
+    - 任务缓存：10分钟后过期（用于防止短时间内重复执行相同任务）
+    - 执行周期：每5分钟清理一次
+    """
+    while True:
+        try:
+            await asyncio.sleep(300)  # 每5分钟执行一次清理
+            now = time.time()
+            expired_hashes = [
+                task_hash for task_hash, data in TASK_CACHE.items()
+                if now - data["timestamp"] > TASK_CACHE_EXPIRE_SECONDS
+            ]
+            for task_hash in expired_hashes:
+                del TASK_CACHE[task_hash]
+            
+            # 日志输出清理结果（仅在有清理时输出）
+            if expired_hashes:
+                logger.debug(f"[缓存清理] 任务缓存: {len(expired_hashes)}个")
+        except Exception as e:
+            logger.error(f"[任务缓存] 清理失败: {e}")
 
 async def periodic_cleanup_pdf_cache():
-    """定期清理过期的PDF文本缓存"""
+    """
+    定期清理过期的PDF文本缓存
+    
+    清理策略：
+    - PDF文本缓存：24小时后过期（用于避免重复解析相同的PDF文件）
+    - 执行周期：每小时清理一次
+    """
     while True:
-        now = time.time()
-        # 清理超过24小时的缓存项
-        expired_keys = [
-            key for key, entry in _pdf_text_cache.items()
-            if now - entry['timestamp'] > 86400  # 24小时
-        ]
-        for key in expired_keys:
-            del _pdf_text_cache[key]
-        if expired_keys:
-            logger.info(f"清理了 {len(expired_keys)} 个过期的PDF缓存项")
-        # 每小时执行一次清理
-        await asyncio.sleep(3600)
+        try:
+            await asyncio.sleep(3600)  # 每小时执行一次清理
+            now = time.time()
+            # 清理超过24小时的缓存项
+            expired_keys = [
+                key for key, entry in _pdf_text_cache.items()
+                if now - entry['timestamp'] > PDF_CACHE_EXPIRE_SECONDS
+            ]
+            for key in expired_keys:
+                del _pdf_text_cache[key]
+            
+            # 日志输出清理结果（仅在有清理时输出）
+            if expired_keys:
+                logger.info(f"[缓存清理] PDF文本缓存: {len(expired_keys)}个")
+        except Exception as e:
+            logger.error(f"[PDF缓存] 清理失败: {e}")
 
 async def periodic_cleanup_connection_pools():
     """定期清理连接池中的闲置连接和无效连接"""
@@ -8230,8 +8290,19 @@ async def fetch_email_pay_only_payer_basic(event):
     count = 1  # 默认数量
     await _process_pay_receipt(event, None, payer_name, "", count)
 
-# 启动定期清理任务
+# ---------------------------- 启动后台清理任务 ----------------------------
 async def start_background_tasks():
+    """
+    启动所有后台缓存清理任务
+    
+    包含以下清理任务：
+    - 代付操作记录和图片缓存清理（每60秒）
+    - 任务缓存清理（每5分钟）
+    - PDF文本缓存清理（每1小时）
+    - 连接池清理（每5分钟）
+    """
+    asyncio.create_task(clean_expired_payback_cache())
+    asyncio.create_task(clean_expired_task_cache())
     asyncio.create_task(periodic_cleanup_pdf_cache())
     asyncio.create_task(periodic_cleanup_connection_pools())
 
@@ -8642,25 +8713,6 @@ async def load_payback_groups():
         payback_groups.add(gid)
 
 
-async def clean_payback_cache():
-    """
-    定时清理 recent_payback_requests 中过期的 “(chat_id, order_id) => 时间戳” 条目，
-    避免与那些存放字符串 order_id 的条目混淆混淆导致类型错误。
-    """
-    while True:
-        await asyncio.sleep(60)
-        now = time.time()
-
-        to_remove = []
-        for key, val in recent_payback_requests.items():
-            # 只对 (chat_id, order_id) 这种 val 应该是数值时间戳的键值对执行过期判断
-            if isinstance(key, tuple) and len(key) == 2 and isinstance(val, (int, float)):
-                if now - val > PAYBACK_DEDUPE_INTERVAL:
-                    to_remove.append(key)
-
-        for key in to_remove:
-            recent_payback_requests.pop(key, None)
-
 async def verify_bot_user_id():
     """验证 BOT_USER_ID 是否已初始化，并返回机器人信息"""
     global BOT_USER_ID
@@ -8719,20 +8771,31 @@ async def main():
         await load_payback_groups()
         await load_group_data_on_startup()  # 合并加载加入时间和实体
         
-        # 7. 启动各种定时任务并保存任务引用
-        # 替换为保留的连接池清理任务：periodic_cleanup_connection_pools
+        # 7. 启动所有后台缓存清理任务并保存任务引用
+        # 代付操作记录和图片缓存清理（每60秒）
+        task_clean_payback = asyncio.create_task(clean_expired_payback_cache())
+        tasks.append(task_clean_payback)
+        logger.info("✅ 代付缓存定时清理已启动（每60秒清理过期的代付记录和图片）")
+        
+        # 任务缓存清理（每5分钟）
+        task_clean_task_cache = asyncio.create_task(clean_expired_task_cache())
+        tasks.append(task_clean_task_cache)
+        logger.info("✅ 任务缓存定时清理已启动（每5分钟清理过期的任务缓存）")
+        
+        # PDF文本缓存清理（每1小时）
+        task_clean_pdf = asyncio.create_task(periodic_cleanup_pdf_cache())
+        tasks.append(task_clean_pdf)
+        logger.info("✅ PDF缓存定时清理已启动（每小时清理过期的PDF文本缓存）")
+        
+        # 连接池清理（每5分钟）
         task_cleanup_connections = asyncio.create_task(periodic_cleanup_connection_pools())
         tasks.append(task_cleanup_connections)
-        logger.info("✅ 连接池定时清理任务已启动（每5分钟执行一次）")
-        
-        # 原有任务：清理代付缓存
-        task_clean_payback = asyncio.create_task(clean_payback_cache())
-        tasks.append(task_clean_payback)
+        logger.info("✅ 连接池定时清理已启动（每5分钟清理闲置连接）")
         
         # 8. 启动订单号缓存清理任务
         task_clean_orders = asyncio.create_task(GroupJoinTimeManager.cleanup_expired_orders())
         tasks.append(task_clean_orders)
-        logger.info("✅ 单号缓存定时清理已启动（60秒清理一次过期记录）")
+        logger.info("✅ 单号缓存定时清理已启动（每60秒清理过期的订单号记录）")
         
         # 9. 启动其他定时清理任务并获取等待时间
         seconds_until_midnight = await start_scheduled_tasks()
