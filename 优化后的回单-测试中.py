@@ -11,7 +11,7 @@ import shutil
 import site
 import pkg_resources
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 # ---------------------------- 日志配置等相关函数（无依赖导入） ----------------------------
@@ -412,23 +412,24 @@ import ctypes
 import shutil  # 用于清理文件
 import re 
 import asyncio
-import traceback  # 用于强制打印堆栈信息
 import imaplib  # 标准库，无需额外安装
 import functools
 import urllib.parse
 from typing import List, Tuple, Dict, Any, Optional  # 合并重复的typing导入
 from time import monotonic
-from email import policy as email_policy
+from email import policy
 import unicodedata
-from email.parser import BytesParser  # 邮件解析
+from datetime import datetime, timezone, timedelta
+from email.utils import parsedate_to_datetime
 from collections import defaultdict, deque
 import base64  # 用于base64编码
 import sqlite3
-import threading
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from imapclient import imap_utf7
+from email.parser import BytesParser  # 邮件解析
+from email import policy as email_policy  # 邮件解析策略
 
 # ---------------------------- 第三方库（需通过pip安装，已在REQUIRED_DEPS中声明） ----------------------------
 import pyotp
@@ -436,12 +437,6 @@ import aiosqlite
 import cv2
 import pytz
 from aiolimiter import AsyncLimiter
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from google.auth.exceptions import RefreshError
-from google_auth_oauthlib.flow import InstalledAppFlow
 from colorama import Fore, Back, init  # 用于终端颜色输出
 from pydrive.auth import GoogleAuth
 from pydrive.drive import GoogleDrive
@@ -504,7 +499,6 @@ from telethon.errors import (
     SessionPasswordNeededError, UserPrivacyRestrictedError,
     ChannelPrivateError
 )
-
 
 # ---------------------------- 初始化（保留原逻辑） ----------------------------
 # 获取当前时间并指定 UTC 时区
@@ -2177,7 +2171,7 @@ async def handle_collection_media(event):
 
         # 30秒内重复转发：更新结果并return
         if GroupJoinTimeManager.is_order_recently_forwarded(chat_id, order_id):
-            result = "30秒内已处理"
+            result = "30秒内已转发，跳过"
             logger.info(f"[代收] 在群组 [{chat_id:>14}] 订单：{order_id} - {result}")
             return
 
@@ -2356,7 +2350,7 @@ async def handle_reminder_messages(event):
 
         # 检查30秒内是否已转发过同一订单
         if GroupJoinTimeManager.is_order_recently_forwarded(chat_id, order_identifier):
-            logger.info(f"[代收] 在群组 [{chat_id:>14}] 订单 {order_identifier} 30秒内已处理")
+            logger.info(f"[代收] 在群组 [{chat_id:>14}] 订单 {order_identifier} 30秒内已转发，跳过重复转发")
             return
 
         # 校验条件：图文消息且由机器人发送
@@ -3114,7 +3108,7 @@ async def auto_reply_cd_messages(event):
         await event.reply(text, reply_to=msg_id)
         
         logger.info(
-            f"[代付] 在群组 [{chat_id:>14}] 发送查单 {'cd' if cd_match else 'c'} {order_id}（Bot）"
+            f"[代付] 在群组 [{chat_id:>14}] 发送查单信息 {'cd' if cd_match else 'c'} {order_id}（Bot）"
         )
         
     except Exception as e:
@@ -3142,7 +3136,7 @@ async def catch_all_images(event):
             order_ids = [oid for oid in order_ids if oid is not None]
 
     if not order_ids:
-        #logger.info(f"[代付] 在群组 [{chat_id:>14}] 已收到无关联订单的图片，将不进行缓存处理")
+        logger.info(f"[代付] 在群组 [{chat_id:>14}] 已收到无关联订单的图片，将不进行缓存处理")
         return
 
     current_count = 1
@@ -6206,60 +6200,30 @@ DB_PATH = "database.db"
 
 # 缓存配置
 CACHE_EXPIRE_SECONDS = 30  # 缓存过期时间(秒)
-CACHE_MAX_SIZE = 1000      # 最大缓存条目数
-_pdf_text_cache = {}        # 全局PDF文本缓存
-TASK_CACHE = {}             # 任务状态缓存：存储任务哈希及状态
+_pdf_text_cache = {}  # 全局PDF文本缓存
+TASK_CACHE = {}  # 任务状态缓存：存储任务哈希及状态
 
 # 连接池配置
 GMAIL_SERVICE_POOL = {
     'connections': {},        # 存储实际连接
     'last_used': {},          # 记录最后使用时间
-    'max_connections': 10,     # 最大连接数
-    'timeout': 180,           # 连接超时时间(秒)
-    'health_check_interval': 60  # 健康检查间隔(秒)
+    'max_connections': 5,     # 最大连接数
+    'timeout': 300            # 连接超时时间(秒)
 }
 FASTMAIL_CONN_POOL = {
     'connections': {},
     'last_used': {},
-    'max_connections': 10,
-    'timeout': 180,
-    'health_check_interval': 60
+    'max_connections': 3,
+    'timeout': 300
 }
-
-# 并发控制配置
-MAX_CONCURRENT_TASKS = 5    # 最大并发任务数
-MAX_CONCURRENT_EMAILS = 10  # 最大并发邮件处理数
-
-# 重试配置
-DEFAULT_RETRY_COUNT = 3     # 默认重试次数
-RETRY_DELAY_BASE = 1        # 初始重试延迟(秒)
 
 # 正则表达式
 NAME_PATTERN = re.compile(r'^[\u4e00-\u9fa5a-zA-Z·\-\']+[·\-\']?[\u4e00-\u9fa5a-zA-Z]*$')  # 姓名验证
-
-# 监控指标
-metrics = {
-    'total_tasks': 0,
-    'completed_tasks': 0,
-    'failed_tasks': 0,
-    'total_emails_processed': 0,
-    'emails_with_attachments': 0,
-    'average_response_time': 0.0,
-    'concurrent_tasks': 0,
-    'cache_hits': 0,
-    'cache_misses': 0,
-    'connection_pool_usage': {
-        'gmail': {'current': 0, 'max': GMAIL_SERVICE_POOL['max_connections']},
-        'fastmail': {'current': 0, 'max': FASTMAIL_CONN_POOL['max_connections']}
-    }
-}
 
 
 # —— 全局变量与锁 —— #
 cache_lock = asyncio.Lock()  # 异步锁确保缓存操作安全
 gmail_service_lock = asyncio.Lock()  # Gmail服务创建的线程安全锁
-metrics_lock = asyncio.Lock()  # 监控指标更新锁
-task_semaphore = asyncio.Semaphore(MAX_CONCURRENT_TASKS)  # 任务级并发控制
 
 
 # —— 任务控制类 —— #
@@ -6268,8 +6232,6 @@ class TaskControl:
     def __init__(self):
         self.terminate = False  # 控制当前任务终止
         self.matched_count = 0  # 记录当前任务的匹配数量
-        self.start_time = None  # 任务开始时间
-        self.end_time = None    # 任务结束时间
 
 class GmailTaskState:
     """Gmail任务状态存储，避免全局变量冲突"""
@@ -6278,7 +6240,6 @@ class GmailTaskState:
         self.matched_count = 0
 
 
-# —— 工具函数 —— #
 def resource_path(relative_path):
     """生成平台兼容的路径（自动处理斜杠问题）"""
     return os.path.abspath(os.path.join(os.getcwd(), relative_path))
@@ -6288,7 +6249,7 @@ def format_chinese_datetime(datetime_str: str) -> str:
     if not datetime_str or '-' not in datetime_str:
         return datetime_str
     try:
-        return datetime.datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S").strftime("%Y年%m月%d日 %H:%M:%S（北京时间）")
+        return datetime.strptime(datetime_str, "%Y-%m-%d %H:%M:%S").strftime("%Y年%m月%d日 %H:%M:%S（北京时间）")
     except Exception:
         return datetime_str
 
@@ -6415,6 +6376,7 @@ def is_other_bot_command(s):
     return bool(re.fullmatch(r'^[a-zA-Z0-9]+$', s))
 
 
+# —— 日志工具函数 —— #
 def log_info(message, source=None):
     """标准化信息日志输出"""
     prefix = f"[{source}] " if source else ""
@@ -6447,63 +6409,25 @@ def parse_pdf_receipt_info(pdf_path: str) -> tuple:
            小写金额, 大写金额, 支付时间, 凭证生成时间, 支付宝流水号)
     """
     # 先检查缓存，添加超时机制（24小时）
-    global _pdf_text_cache
     cache_entry = _pdf_text_cache.get(pdf_path)
     if cache_entry and (time.time() - cache_entry['timestamp'] < 86400):
-        # 修复：在多线程环境中安全地调用异步函数
-        def run_async_task():
-            try:
-                # 尝试获取当前事件循环
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                # 如果没有事件循环，则创建一个新的
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-            
-            # 检查循环是否在运行
-            if loop.is_running():
-                asyncio.create_task(update_metrics('cache_hits', 1))
-            else:
-                try:
-                    loop.run_until_complete(update_metrics('cache_hits', 1))
-                finally:
-                    loop.close()
-        
-        # 在单独的线程中运行异步任务
-        threading.Thread(target=run_async_task, daemon=True).start()
         return cache_entry['data']
-    
-    # 修复：在多线程环境中安全地调用异步函数
-    def run_async_task():
-        try:
-            # 尝试获取当前事件循环
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            # 如果没有事件循环，则创建一个新的
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        
-        # 检查循环是否在运行
-        if loop.is_running():
-            asyncio.create_task(update_metrics('cache_misses', 1))
-        else:
-            try:
-                loop.run_until_complete(update_metrics('cache_misses', 1))
-            finally:
-                loop.close()
-    
-    # 在单独的线程中运行异步任务
-    threading.Thread(target=run_async_task, daemon=True).start()
     
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF文件不存在: {pdf_path}")
     
     try:
-        # 使用上下文管理器确保PDF文档自动关闭
-        with fitz.open(pdf_path) as doc:
-            if doc.page_count == 0:
-                raise Exception("PDF无有效页面")
-            text = doc.load_page(0).get_text()
+        doc = fitz.open(pdf_path)
+        if doc.page_count == 0:
+            raise Exception("PDF无有效页面")
+        text = doc.load_page(0).get_text()
+        doc.close()
+        
+        # 更新缓存，添加时间戳
+        _pdf_text_cache[pdf_path] = {
+            'data': text,
+            'timestamp': time.time()
+        }
     except Exception as e:
         logger.error(f"PDF处理失败: {e}")
         raise
@@ -6547,18 +6471,11 @@ def parse_pdf_receipt_info(pdf_path: str) -> tuple:
 
     result = (payer, pacc, payer_type, payee, eacc, payee_type, amount, amount_in_words, pay_time, receipt_time, alipay_flow_no)
     
-    # 更新缓存，存储解析结果而非原始文本，控制缓存大小
+    # 更新缓存，存储解析结果而非原始文本
     _pdf_text_cache[pdf_path] = {
         'data': result,
         'timestamp': time.time()
     }
-    
-    # 缓存大小控制
-    if len(_pdf_text_cache) > CACHE_MAX_SIZE:
-        # 按时间排序并删除最旧的条目
-        oldest_keys = sorted(_pdf_text_cache.keys(), key=lambda k: _pdf_text_cache[k]['timestamp'])[:len(_pdf_text_cache) - CACHE_MAX_SIZE]
-        for key in oldest_keys:
-            del _pdf_text_cache[key]
     
     return result
 
@@ -6655,10 +6572,9 @@ def process_pdf_attachment(pdf_bytes: bytes, out_dir: str, source: str, original
         # 检查文件是否已存在（避免重复处理）
         if os.path.exists(pdf_path) and os.path.exists(img_path):
             try:
-                # 使用上下文管理器确保PDF文档自动关闭
-                with fitz.open(pdf_path) as doc:
-                    pdf_text = doc.load_page(0).get_text()
-                global _pdf_text_cache
+                doc = fitz.open(pdf_path)
+                pdf_text = doc.load_page(0).get_text()
+                doc.close()
                 _pdf_text_cache[f"{source}_{img_path}"] = {
                     'data': pdf_text,
                     'timestamp': time.time()
@@ -6673,11 +6589,12 @@ def process_pdf_attachment(pdf_bytes: bytes, out_dir: str, source: str, original
             f.write(pdf_bytes)
         log_attachment_processing(pdf_path, source, "下载")
 
-        # 生成300DPI高清图片 - 使用上下文管理器确保资源释放
-        with fitz.open(pdf_path) as doc:
-            pix = doc.load_page(0).get_pixmap(matrix=fitz.Matrix(3.0, 3.0), dpi=300)
-            pix.save(img_path)
-            pdf_text = doc.load_page(0).get_text()
+        # 生成300DPI高清图片
+        doc = fitz.open(pdf_path)
+        pix = doc.load_page(0).get_pixmap(matrix=fitz.Matrix(3.0, 3.0), dpi=300)
+        pix.save(img_path)
+        pdf_text = doc.load_page(0).get_text()
+        doc.close()
 
         # 文本缓存
         _pdf_text_cache[f"{source}_{img_path}"] = {
@@ -6692,6 +6609,12 @@ def process_pdf_attachment(pdf_bytes: bytes, out_dir: str, source: str, original
 
 
 # —— Gmail 相关功能 —— #
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from google.auth.exceptions import RefreshError
+from google_auth_oauthlib.flow import InstalledAppFlow
 
 CREDENTIALS_FILES = {
     'pay': {
@@ -6838,9 +6761,9 @@ async def initialize_credentials(credential_type: str, event=None):
     
     return creds
 
-async def get_gmail_service(credential_type: str, event=None, max_retries=DEFAULT_RETRY_COUNT):
+async def get_gmail_service(credential_type: str, event=None, max_retries=3):
     """获取 Gmail 服务，优化并发处理"""
-    retry_delay = RETRY_DELAY_BASE  # 初始重试延迟（秒）
+    retry_delay = 1  # 初始重试延迟（秒）
     
     async with gmail_service_lock:
         for attempt in range(max_retries):
@@ -6903,28 +6826,9 @@ async def get_gmail_service(credential_type: str, event=None, max_retries=DEFAUL
                 # 构建并返回服务
                 service = build("gmail", "v1", credentials=creds)
                 
-                # 控制连接池大小
-                if len(GMAIL_SERVICE_POOL['connections']) >= GMAIL_SERVICE_POOL['max_connections']:
-                    # 移除最旧的连接
-                    oldest_key = min(GMAIL_SERVICE_POOL['last_used'], key=GMAIL_SERVICE_POOL['last_used'].get)
-                    try:
-                        GMAIL_SERVICE_POOL['connections'][oldest_key].close()
-                    except Exception as e:
-                        logger.error(f"关闭旧Gmail连接失败: {e}")
-                    del GMAIL_SERVICE_POOL['connections'][oldest_key]
-                    del GMAIL_SERVICE_POOL['last_used'][oldest_key]
-                
                 # 更新连接池和最后使用时间
                 GMAIL_SERVICE_POOL['connections'][credential_type] = service
                 GMAIL_SERVICE_POOL['last_used'][credential_type] = time.time()
-                
-                # 更新监控指标
-                await update_metrics('connection_pool_usage', {
-                    'gmail': {
-                        'current': len(GMAIL_SERVICE_POOL['connections']),
-                        'max': GMAIL_SERVICE_POOL['max_connections']
-                    }
-                })
                 
                 return service
 
@@ -6939,18 +6843,17 @@ async def get_gmail_service(credential_type: str, event=None, max_retries=DEFAUL
                 if attempt < max_retries - 1:
                     logger.info(f"重试获取Gmail服务 ({attempt + 1}/{max_retries})")
                     await asyncio.sleep(retry_delay)
-                    retry_delay *= 2  # 指数退避
+                    retry_delay *= 2
                     continue
                     
                 raise
 
             except HttpError as e:
                 logger.error(f"构建 {credential_type} Gmail 服务失败: {e}")
-                # 根据错误码决定是否重试
-                if e.resp.status in [429, 500, 502, 503, 504] and attempt < max_retries - 1:
+                if attempt < max_retries - 1:
                     logger.info(f"重试获取Gmail服务 ({attempt + 1}/{max_retries})")
                     await asyncio.sleep(retry_delay)
-                    retry_delay *= 2  # 指数退避
+                    retry_delay *= 2
                     continue
                 raise
         
@@ -6977,7 +6880,6 @@ def process_attachment(service, msg, out_dir: str) -> str:
                 
                 img_path, _, _ = process_pdf_attachment(pdf_bytes, out_dir, source="gmail", original_filename=fn)
                 if img_path:
-                    global _pdf_text_cache
                     _pdf_text_cache[msg["id"]] = {
                         'data': _pdf_text_cache.get(f"gmail_{img_path}", {}).get('data', ""),
                         'timestamp': time.time()
@@ -7072,7 +6974,7 @@ async def get_payback_items(service, name: str, max_results: int, out_dir: str):
             logger.error(f"处理邮件失败: {e}")
     
     # 控制并发数量
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_EMAILS)
+    semaphore = asyncio.Semaphore(5)
     
     async def bounded_process_message(ref):
         async with semaphore:
@@ -7081,10 +6983,6 @@ async def get_payback_items(service, name: str, max_results: int, out_dir: str):
     # 并发处理所有邮件
     messages = resp.get('messages', [])
     await asyncio.gather(*[bounded_process_message(ref) for ref in messages])
-    
-    # 更新监控指标
-    await update_metrics('total_emails_processed', len(messages))
-    await update_metrics('emails_with_attachments', len(items))
     
     return items, total_messages
 
@@ -7207,7 +7105,6 @@ def get_payback_items_with_payee(
 
 
 # —— FastMail 相关功能 —— #
-
 # 凭证管理
 async def get_fastmail_credentials(credential_type: str = 'pay') -> dict:
     try:
@@ -7238,8 +7135,8 @@ async def has_fastmail_credentials() -> bool:
 # 连接管理
 async def connect_fastmail_imap(event=None) -> imaplib.IMAP4_SSL:
     """连接FastMail IMAP服务器，带重试机制"""
-    max_retries = DEFAULT_RETRY_COUNT
-    retry_delay = RETRY_DELAY_BASE  # 初始重试延迟（秒）
+    max_retries = 3
+    retry_delay = 1  # 初始重试延迟（秒）
     for attempt in range(max_retries):
         try:
             creds = await get_fastmail_credentials()
@@ -7258,28 +7155,9 @@ async def connect_fastmail_imap(event=None) -> imaplib.IMAP4_SSL:
 
             conn = await asyncio.to_thread(_create_conn)
             
-            # 控制连接池大小
-            if len(FASTMAIL_CONN_POOL['connections']) >= FASTMAIL_CONN_POOL['max_connections']:
-                # 移除最旧的连接
-                oldest_key = min(FASTMAIL_CONN_POOL['last_used'], key=FASTMAIL_CONN_POOL['last_used'].get)
-                try:
-                    FASTMAIL_CONN_POOL['connections'][oldest_key].close()
-                except Exception as e:
-                    logger.error(f"关闭旧FastMail连接失败: {e}")
-                del FASTMAIL_CONN_POOL['connections'][oldest_key]
-                del FASTMAIL_CONN_POOL['last_used'][oldest_key]
-            
             # 更新连接池和最后使用时间
             FASTMAIL_CONN_POOL['connections']['fastmail'] = conn
             FASTMAIL_CONN_POOL['last_used']['fastmail'] = time.time()
-            
-            # 更新监控指标
-            await update_metrics('connection_pool_usage', {
-                'fastmail': {
-                    'current': len(FASTMAIL_CONN_POOL['connections']),
-                    'max': FASTMAIL_CONN_POOL['max_connections']
-                }
-            })
             
             return conn
         except Exception as e:
@@ -7666,45 +7544,11 @@ async def clean_expired_cache():
     for task_hash in expired_hashes:
         del TASK_CACHE[task_hash]
 
-async def update_metrics(key, value):
-    """更新监控指标"""
-    async with metrics_lock:
-        if key in ['total_tasks', 'completed_tasks', 'failed_tasks', 
-                  'total_emails_processed', 'emails_with_attachments', 
-                  'cache_hits', 'cache_misses']:
-            metrics[key] += value
-        elif key == 'concurrent_tasks':
-            metrics[key] = value
-        elif key == 'connection_pool_usage':
-            for pool, stats in value.items():
-                metrics['connection_pool_usage'][pool].update(stats)
-        elif key == 'average_response_time':
-            # 简单的移动平均计算
-            current_avg = metrics['average_response_time']
-            count = metrics['completed_tasks']
-            metrics['average_response_time'] = (current_avg * count + value) / (count + 1)
-
-async def log_metrics():
-    """定期记录监控指标"""
-    while True:
-        async with metrics_lock:
-            logger.info(f"监控指标: "
-                       f"任务总数={metrics['total_tasks']}, "
-                       f"完成={metrics['completed_tasks']}, "
-                       f"失败={metrics['failed_tasks']}, "
-                       f"并发任务={metrics['concurrent_tasks']}, "
-                       f"平均响应时间={metrics['average_response_time']:.2f}s, "
-                       f"缓存命中率={metrics['cache_hits']/(metrics['cache_hits']+metrics['cache_misses']+1e-9):.2%}, "
-                       f"Gmail连接池={metrics['connection_pool_usage']['gmail']['current']}/{metrics['connection_pool_usage']['gmail']['max']}, "
-                       f"FastMail连接池={metrics['connection_pool_usage']['fastmail']['current']}/{metrics['connection_pool_usage']['fastmail']['max']}")
-        await asyncio.sleep(60)  # 每分钟记录一次
-
 async def periodic_cleanup_pdf_cache():
     """定期清理过期的PDF文本缓存"""
     while True:
         now = time.time()
         # 清理超过24小时的缓存项
-        global _pdf_text_cache
         expired_keys = [
             key for key, entry in _pdf_text_cache.items()
             if now - entry['timestamp'] > 86400  # 24小时
@@ -7730,416 +7574,373 @@ async def periodic_cleanup_connection_pools():
             return False
 
     def is_fastmail_conn_valid(conn):
-        """验证FastMail IMAP连接是否有效，增强异常处理"""
+        """验证FastMail IMAP连接是否有效"""
         try:
             # 发送NOOP命令检查连接状态
             status, _ = conn.noop()
             return status == 'OK'
-        except (EOFError, ConnectionError, OSError) as e:
-            # 明确捕获连接中断相关异常
-            logger.warning(f"FastMail连接无效: command: NOOP => {str(e)}")
-            return False
         except Exception as e:
-            logger.warning(f"FastMail连接验证异常: {str(e)}")
+            logger.warning(f"FastMail连接无效: {str(e)}")
             return False
 
     while True:
         now = time.time()
         
-        # 清理Gmail连接池（逻辑保持不变）
+        # 清理Gmail连接池（逐个处理，记录详细日志）
         gmail_keys = list(GMAIL_SERVICE_POOL['last_used'].keys())
         for key in gmail_keys:
+            # 计算闲置时间
             last_used = GMAIL_SERVICE_POOL['last_used'].get(key, 0)
             idle_time = now - last_used
             
+            # 检查连接是否存在（防止并发操作导致的键已被删除）
             if key not in GMAIL_SERVICE_POOL['connections']:
                 continue
                 
+            # 判断清理原因
             is_timeout = idle_time > GMAIL_SERVICE_POOL['timeout']
             is_invalid = not is_gmail_service_valid(GMAIL_SERVICE_POOL['connections'][key])
             
             if is_timeout or is_invalid:
                 try:
+                    # 关闭连接
                     GMAIL_SERVICE_POOL['connections'][key].close()
                 except Exception as e:
                     logger.error(f"关闭Gmail连接 {key} 失败: {e}")
                 
+                # 移除连接
                 del GMAIL_SERVICE_POOL['connections'][key]
                 del GMAIL_SERVICE_POOL['last_used'][key]
                 
+                # 输出详细日志（区分过期/无效原因）
                 reason = "过期的" if is_timeout else "无效的"
                 logger.info(f"[Gmail] 清理{reason}Gmail连接 (闲置时间: {idle_time:.1f}秒)")
         
-        # 清理FastMail连接池（优化关闭逻辑）
+        # 清理FastMail连接池（逐个处理，记录详细日志）
         fastmail_keys = list(FASTMAIL_CONN_POOL['last_used'].keys())
         for key in fastmail_keys:
+            # 计算闲置时间
             last_used = FASTMAIL_CONN_POOL['last_used'].get(key, 0)
             idle_time = now - last_used
             
+            # 检查连接是否存在
             if key not in FASTMAIL_CONN_POOL['connections']:
                 continue
                 
+            # 判断清理原因
             is_timeout = idle_time > FASTMAIL_CONN_POOL['timeout']
             is_invalid = not is_fastmail_conn_valid(FASTMAIL_CONN_POOL['connections'][key])
             
             if is_timeout or is_invalid:
-                conn = FASTMAIL_CONN_POOL['connections'][key]
                 try:
-                    # 对IMAP连接使用更安全的关闭方式
-                    if is_invalid:
-                        # 已失效的连接直接关闭底层socket
-                        conn.shutdown()
-                    else:
-                        # 正常过期的连接优雅关闭
-                        conn.close()
-                except (EOFError, ConnectionError, OSError) as e:
-                    # 忽略已断开连接的关闭错误
-                    logger.debug(f"FastMail连接 {key} 已断开，跳过关闭: {e}")
+                    # 关闭连接
+                    FASTMAIL_CONN_POOL['connections'][key].close()
                 except Exception as e:
                     logger.error(f"关闭FastMail连接 {key} 失败: {e}")
-                finally:
-                    # 无论关闭是否成功，都从连接池移除
-                    del FASTMAIL_CONN_POOL['connections'][key]
-                    del FASTMAIL_CONN_POOL['last_used'][key]
                 
+                # 移除连接
+                del FASTMAIL_CONN_POOL['connections'][key]
+                del FASTMAIL_CONN_POOL['last_used'][key]
+                
+                # 输出详细日志（区分过期/无效原因）
                 reason = "过期的" if is_timeout else "无效的"
                 logger.info(f"[Fastmail] 清理{reason}FastMail连接 (闲置时间: {idle_time:.1f}秒)")
         
-        # 更新连接池监控指标
-        await update_metrics('connection_pool_usage', {
-            'gmail': {
-                'current': len(GMAIL_SERVICE_POOL['connections']),
-                'max': GMAIL_SERVICE_POOL['max_connections']
-            },
-            'fastmail': {
-                'current': len(FASTMAIL_CONN_POOL['connections']),
-                'max': FASTMAIL_CONN_POOL['max_connections']
-            }
-        })
-        
-        # 每2分钟执行一次清理（保持原有频率）
-        await asyncio.sleep(120)
+        # 每5分钟执行一次清理（300秒）
+        await asyncio.sleep(300)
+
 
 
 async def fetch_combined_receipts(event, payer_name, payee_name, count, email_type=None):
     """根据可用凭证并发获取合并的回单结果（任务隔离版本）"""
-    # 使用信号量控制并发任务数量
-    async with task_semaphore:
-        # 更新并发任务数指标
-        current_concurrent = metrics['concurrent_tasks']
-        await update_metrics('concurrent_tasks', current_concurrent + 1)
+    task_hash = generate_task_hash(payer_name, payee_name, count, email_type)
+    
+    # 创建任务控制实例
+    task_control = TaskControl()
+    
+    # 检查任务状态
+    async with cache_lock:
+        await clean_expired_cache()
         
+        if task_hash in TASK_CACHE:
+            task_data = TASK_CACHE[task_hash]
+            if task_data["status"] == "processing":
+                return await event.reply("⚠️ 相同查询正在处理中，请稍候...")
+            elif task_data["status"] == "completed":
+                if task_data.get("has_result", False):
+                    return await event.reply(f"ℹ️ 相同查询结果已获取，如需更新请{int(CACHE_EXPIRE_SECONDS)}秒后再试")
+                else:
+                    del TASK_CACHE[task_hash]
+        
+        TASK_CACHE[task_hash] = {
+            "status": "processing",
+            "timestamp": time.time(),
+            "result": None,
+            "has_result": False
+        }
+    
+    try:
+        available = await check_available_credentials()
+        results = []
+        temp_dirs = {}
+        
+        # 邮箱来源处理
+        email_sources = []
+        prefixes = []
+        if email_type:
+            if email_type.lower() == "gmail" and available["gmail"]:
+                email_sources.append("Gmail")
+                prefixes.append("gmail_combined")
+            elif email_type.lower() == "fastmail" and available["fastmail"]:
+                email_sources.append("Fastmail")
+                prefixes.append("fastmail_combined")
+            else:
+                return await event.reply(f"❌ 未配置{email_type}的有效凭证")
+        else:
+            if available["gmail"]:
+                email_sources.append("Gmail")
+                prefixes.append("gmail_combined")
+            if available["fastmail"]:
+                email_sources.append("Fastmail")
+                prefixes.append("fastmail_combined")
+        
+        source_text = " + ".join(email_sources)
+        
+        # 创建临时目录
+        temp_dir_created = False
+        if prefixes:
+            temp_dirs = create_temp_dirs(prefixes)
+            temp_dir_created = True
+            log_success(f"创建临时目录，{source_text} 开始处理回单...")
+            await asyncio.sleep(0.1)
+        
+        gmail_dir = temp_dirs.get("gmail_combined", {}).get('path') if available["gmail"] else None
+        fastmail_dir = temp_dirs.get("fastmail_combined", {}).get('path') if available["fastmail"] else None
+        
+        # 解析邮件时间的辅助函数
+        def parse_email_time(raw_time):
+            if not raw_time:
+                return datetime.min
+            
+            try:
+                return parsedate_to_datetime(raw_time)
+            except:
+                pass
+            
+            time_formats = [
+                "%a, %d %b %Y %H:%M:%S %z",
+                "%Y-%m-%d %H:%M:%S",
+                "%d/%m/%Y %H:%M:%S",
+                "%m/%d/%Y %H:%M:%S"
+            ]
+            for fmt in time_formats:
+                try:
+                    return datetime.strptime(raw_time, fmt)
+                except:
+                    continue
+            
+            log_error(f"无法解析时间格式：{raw_time}，将按最早时间处理")
+            return datetime.min
+        
+        # FastMail任务处理
+        async def fetch_fastmail():
+            fastmail_control = TaskControl()
+            
+            async def check_termination():
+                while not fastmail_control.terminate:
+                    if task_control.terminate:
+                        fastmail_control.terminate = True
+                    await asyncio.sleep(0.5)
+            
+            termination_task = asyncio.create_task(check_termination())
+            
+            try:
+                conn = await connect_fastmail_imap(event)
+                if not conn:
+                    return []
+                
+                items, total_available = await get_fastmail_pay_receipts_with_payee(
+                    conn, payer_name, payee_name, count, fastmail_dir,
+                    required_email='service@mail.alipay.com',
+                    task_control=fastmail_control
+                )
+                
+                return items
+            finally:
+                fastmail_control.terminate = True
+                termination_task.cancel()
+                await asyncio.gather(termination_task, return_exceptions=True)
+        
+        # Gmail任务处理
+        async def fetch_gmail():
+            gmail_control = TaskControl()
+            
+            async def check_termination():
+                while not gmail_control.terminate:
+                    if task_control.terminate:
+                        gmail_control.terminate = True
+                    await asyncio.sleep(0.5)
+            
+            termination_task = asyncio.create_task(check_termination())
+            
+            try:
+                svc = await get_gmail_service('pay', event)
+                if not svc:
+                    return []
+                
+                items, total_available = await asyncio.to_thread(
+                    get_payback_items_with_payee, 
+                    svc, payer_name, payee_name, count, gmail_dir,
+                    required_email='service@mail.alipay.com',
+                    task_control=gmail_control
+                )
+                
+                return items
+            finally:
+                gmail_control.terminate = True
+                termination_task.cancel()
+                await asyncio.gather(termination_task, return_exceptions=True)
+        
+        # 执行任务并统一排序
         try:
-            task_hash = generate_task_hash(payer_name, payee_name, count, email_type)
+            tasks = []
+            if available["gmail"] and (not email_type or email_type.lower() == "gmail"):
+                tasks.append(fetch_gmail())
+            if available["fastmail"] and (not email_type or email_type.lower() == "fastmail"):
+                tasks.append(fetch_fastmail())
             
-            # 创建任务控制实例
-            task_control = TaskControl()
-            task_control.start_time = time.time()
+            if not tasks:
+                result = await event.reply("❌ 未配置任何邮箱凭证，请先配置Gmail或FastMail凭证")
+                async with cache_lock:
+                    TASK_CACHE[task_hash] = {
+                        "status": "completed",
+                        "timestamp": time.time(),
+                        "result": result,
+                        "has_result": False
+                    }
+                return result
             
-            # 检查任务状态
+            # 等待所有任务完成
+            results_list = await asyncio.gather(*tasks)
+            for items in results_list:
+                if items:
+                    results.extend(items)
+            
+            # 处理结果
+            if not results:
+                reply_msg = await event.reply(f"❌ 未找到付款人「{payer_name}」向收款人「{payee_name}」的回单")
+                async with cache_lock:
+                    TASK_CACHE[task_hash] = {
+                        "status": "completed",
+                        "timestamp": time.time(),
+                        "result": reply_msg,
+                        "has_result": False
+                    }
+                return reply_msg
+            
+            # 按时间排序并发送
+            results.sort(key=lambda x: parse_email_time(x[1]), reverse=True)
+            results = results[:count]
+            sent_count = 0
+            
+            semaphore = asyncio.Semaphore(5)
+            
+            async def send_receipt(item):
+                nonlocal sent_count
+                try:
+                    img_path, raw_date, sender_email, payer, pacc, payer_type, payee, eacc, payee_type, \
+                    amount, amount_in_words, pay_time, receipt_time, alipay_flow_no, email_type, recipient_email = item
+
+                    try:
+                        send_time = parsedate_to_datetime(raw_date).strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        send_time = raw_date
+
+                    sender_name, sender_addr = extract_sender_info(sender_email)
+
+                    caption = generate_receipt_caption(
+                        source=email_type,
+                        payer=escape_special_chars(payer),
+                        payer_type=escape_special_chars(payer_type),
+                        payer_account=escape_special_chars(pacc),
+                        payee=escape_special_chars(payee),
+                        payee_type=escape_special_chars(payee_type),
+                        payee_account=eacc,
+                        amount=escape_special_chars(amount),
+                        amount_in_words=escape_special_chars(amount_in_words),
+                        pay_time=escape_special_chars(pay_time),
+                        receipt_time=escape_special_chars(receipt_time),
+                        alipay_flow_no=escape_special_chars(alipay_flow_no),
+                        sender_name=escape_special_chars(sender_name),
+                        sender_addr=escape_special_chars(sender_addr),
+                        send_time=escape_special_chars(send_time)
+                    )
+
+                    # 假设client是一个已初始化的Telegram客户端实例
+                    await client.send_file(
+                        event.chat_id,
+                        img_path,
+                        caption=caption,
+                        reply_to=event.message.id,
+                        force_document=(count > 1)
+                    )
+                    
+                    sent_count += 1
+                    logger.info(f"[{email_type.capitalize()}] 已发送回单: 收款人：{payee}   金额：{amount}")
+                    
+                    # 删除临时文件，添加异常处理
+                    try:
+                        if os.path.exists(img_path):
+                            os.remove(img_path)
+                            pdf_path = img_path.rsplit('.', 1)[0] + '.pdf'
+                            if os.path.exists(pdf_path):
+                                os.remove(pdf_path)
+                    except OSError as e:
+                        logger.error(f"删除临时文件 {img_path} 失败: {e}")
+                    
+                except Exception as e:
+                    log_error(f"发送回单失败: {e}", email_type)
+            
+            await asyncio.gather(*[send_receipt(item) for item in results])
+            
+            # 更新缓存
             async with cache_lock:
-                await clean_expired_cache()
-                
-                if task_hash in TASK_CACHE:
-                    task_data = TASK_CACHE[task_hash]
-                    if task_data["status"] == "processing":
-                        return await event.reply("⚠️ 相同查询正在处理中，请稍候...")
-                    elif task_data["status"] == "completed":
-                        if task_data.get("has_result", False):
-                            return await event.reply(f"ℹ️ 相同查询结果已获取，如需更新请{int(CACHE_EXPIRE_SECONDS)}秒后再试")
-                        else:
-                            del TASK_CACHE[task_hash]
-                
                 TASK_CACHE[task_hash] = {
-                    "status": "processing",
+                    "status": "completed",
+                    "timestamp": time.time(),
+                    "result": None,
+                    "has_result": len(results) > 0
+                }
+            
+            return None
+            
+        except Exception as e:
+            if task_control.terminate:
+                log_info(f"已获取足够回单，停止处理")
+            else:
+                log_error(f"处理回单时发生异常: {e}", exc_info=True)
+            async with cache_lock:
+                TASK_CACHE[task_hash] = {
+                    "status": "completed",
                     "timestamp": time.time(),
                     "result": None,
                     "has_result": False
                 }
-            
-            # 更新任务总数指标
-            await update_metrics('total_tasks', 1)
-            
-            try:
-                available = await check_available_credentials()
-                results = []
-                temp_dirs = {}
-                
-                # 邮箱来源处理
-                email_sources = []
-                prefixes = []
-                if email_type:
-                    if email_type.lower() == "gmail" and available["gmail"]:
-                        email_sources.append("Gmail")
-                        prefixes.append("gmail_combined")
-                    elif email_type.lower() == "fastmail" and available["fastmail"]:
-                        email_sources.append("Fastmail")
-                        prefixes.append("fastmail_combined")
-                    else:
-                        return await event.reply(f"❌ 未配置{email_type}的有效凭证")
-                else:
-                    if available["gmail"]:
-                        email_sources.append("Gmail")
-                        prefixes.append("gmail_combined")
-                    if available["fastmail"]:
-                        email_sources.append("Fastmail")
-                        prefixes.append("fastmail_combined")
-                
-                source_text = " + ".join(email_sources)
-                
-                # 创建临时目录
-                temp_dir_created = False
-                if prefixes:
-                    temp_dirs = create_temp_dirs(prefixes)
-                    temp_dir_created = True
-                    log_success(f"创建临时目录，{source_text} 开始处理回单...")
-                    await asyncio.sleep(0.1)
-                
-                gmail_dir = temp_dirs.get("gmail_combined", {}).get('path') if available["gmail"] else None
-                fastmail_dir = temp_dirs.get("fastmail_combined", {}).get('path') if available["fastmail"] else None
-                
-                # 解析邮件时间的辅助函数
-                def parse_email_time(raw_time):
-                    if not raw_time:
-                        return datetime.datetime.min
-                    
-                    try:
-                        return parsedate_to_datetime(raw_time)
-                    except:
-                        pass
-                    
-                    time_formats = [
-                        "%a, %d %b %Y %H:%M:%S %z",
-                        "%Y-%m-%d %H:%M:%S",
-                        "%d/%m/%Y %H:%M:%S",
-                        "%m/%d/%Y %H:%M:%S"
-                    ]
-                    for fmt in time_formats:
-                        try:
-                            return datetime.datetime.strptime(raw_time, fmt)
-                        except:
-                            continue
-                    
-                    log_error(f"无法解析时间格式：{raw_time}，将按最早时间处理")
-                    return datetime.datetime.min
-                
-                # FastMail任务处理
-                async def fetch_fastmail():
-                    fastmail_control = TaskControl()
-                    
-                    async def check_termination():
-                        while not fastmail_control.terminate:
-                            if task_control.terminate:
-                                fastmail_control.terminate = True
-                            await asyncio.sleep(0.5)
-                    
-                    termination_task = asyncio.create_task(check_termination())
-                    
-                    try:
-                        conn = await connect_fastmail_imap(event)
-                        if not conn:
-                            return []
-                        
-                        items, total_available = await get_fastmail_pay_receipts_with_payee(
-                            conn, payer_name, payee_name, count, fastmail_dir,
-                            required_email='service@mail.alipay.com',
-                            task_control=fastmail_control
-                        )
-                        
-                        return items
-                    finally:
-                        fastmail_control.terminate = True
-                        termination_task.cancel()
-                        await asyncio.gather(termination_task, return_exceptions=True)
-                
-                # Gmail任务处理
-                async def fetch_gmail():
-                    gmail_control = TaskControl()
-                    
-                    async def check_termination():
-                        while not gmail_control.terminate:
-                            if task_control.terminate:
-                                gmail_control.terminate = True
-                            await asyncio.sleep(0.5)
-                    
-                    termination_task = asyncio.create_task(check_termination())
-                    
-                    try:
-                        svc = await get_gmail_service('pay', event)
-                        if not svc:
-                            return []
-                        
-                        items, total_available = await asyncio.to_thread(
-                            get_payback_items_with_payee, 
-                            svc, payer_name, payee_name, count, gmail_dir,
-                            required_email='service@mail.alipay.com',
-                            task_control=gmail_control
-                        )
-                        
-                        return items
-                    finally:
-                        gmail_control.terminate = True
-                        termination_task.cancel()
-                        await asyncio.gather(termination_task, return_exceptions=True)
-                
-                # 执行任务并统一排序
-                try:
-                    tasks = []
-                    if available["gmail"] and (not email_type or email_type.lower() == "gmail"):
-                        tasks.append(fetch_gmail())
-                    if available["fastmail"] and (not email_type or email_type.lower() == "fastmail"):
-                        tasks.append(fetch_fastmail())
-                    
-                    if not tasks:
-                        result = await event.reply("❌ 未配置任何邮箱凭证，请先配置Gmail或FastMail凭证")
-                        async with cache_lock:
-                            TASK_CACHE[task_hash] = {
-                                "status": "completed",
-                                "timestamp": time.time(),
-                                "result": result,
-                                "has_result": False
-                            }
-                        return result
-                    
-                    # 等待所有任务完成
-                    results_list = await asyncio.gather(*tasks)
-                    for items in results_list:
-                        if items:
-                            results.extend(items)
-                    
-                    # 处理结果
-                    if not results:
-                        reply_msg = await event.reply(f"❌ 未找到付款人「{payer_name}」 收款人「{payee_name}」的回单")
-                        async with cache_lock:
-                            TASK_CACHE[task_hash] = {
-                                "status": "completed",
-                                "timestamp": time.time(),
-                                "result": reply_msg,
-                                "has_result": False
-                            }
-                        return reply_msg
-                    
-                    # 按时间排序并发送
-                    results.sort(key=lambda x: parse_email_time(x[1]), reverse=True)
-                    results = results[:count]
-                    sent_count = 0
-                    
-                    semaphore = asyncio.Semaphore(MAX_CONCURRENT_EMAILS)
-                    
-                    async def send_receipt(item):
-                        nonlocal sent_count
-                        img_path = None
-                        pdf_path = None
-                        try:
-                            img_path, raw_date, sender_email, payer, pacc, payer_type, payee, eacc, payee_type, \
-                            amount, amount_in_words, pay_time, receipt_time, alipay_flow_no, email_type, recipient_email = item
-
-                            try:
-                                send_time = parsedate_to_datetime(raw_date).strftime("%Y-%m-%d %H:%M:%S")
-                            except:
-                                send_time = raw_date
-
-                            sender_name, sender_addr = extract_sender_info(sender_email)
-
-                            caption = generate_receipt_caption(
-                                source=email_type,
-                                payer=escape_special_chars(payer),
-                                payer_type=escape_special_chars(payer_type),
-                                payer_account=escape_special_chars(pacc),
-                                payee=escape_special_chars(payee),
-                                payee_type=escape_special_chars(payee_type),
-                                payee_account=eacc,
-                                amount=escape_special_chars(amount),
-                                amount_in_words=escape_special_chars(amount_in_words),
-                                pay_time=escape_special_chars(pay_time),
-                                receipt_time=escape_special_chars(receipt_time),
-                                alipay_flow_no=escape_special_chars(alipay_flow_no),
-                                sender_name=escape_special_chars(sender_name),
-                                sender_addr=escape_special_chars(sender_addr),
-                                send_time=escape_special_chars(send_time)
-                            )
-
-                            # 保存PDF路径用于后续删除
-                            if img_path:
-                                pdf_path = img_path.rsplit('.', 1)[0] + '.pdf'
-
-                            await client.send_file(
-                                event.chat_id,
-                                img_path,
-                                caption=caption,
-                                reply_to=event.message.id,
-                                force_document=(count > 1)
-                            )
-                            
-                            sent_count += 1
-                            logger.info(f"[{email_type.capitalize()}] 已发送回单: 收款人：{payee}   金额：{amount}")
-                            
-                        except Exception as e:
-                            log_error(f"发送回单失败: {e}", email_type)
-                        finally:
-                            # 确保临时文件被删除，无论发送成功与否
-                            try:
-                                if img_path and os.path.exists(img_path):
-                                    os.remove(img_path)
-                                if pdf_path and os.path.exists(pdf_path):
-                                    os.remove(pdf_path)
-                            except OSError as e:
-                                logger.error(f"删除临时文件 {img_path} 失败: {e}")
-                    
-                    await asyncio.gather(*[send_receipt(item) for item in results])
-                    
-                    # 更新缓存
-                    async with cache_lock:
-                        TASK_CACHE[task_hash] = {
-                            "status": "completed",
-                            "timestamp": time.time(),
-                            "result": None,
-                            "has_result": len(results) > 0
-                        }
-                    
-                    # 更新完成任务指标
-                    await update_metrics('completed_tasks', 1)
-                    
-                    return None
-                    
-                except Exception as e:
-                    if task_control.terminate:
-                        log_info(f"已获取足够回单，停止处理")
-                    else:
-                        log_error(f"处理回单时发生异常: {e}", exc_info=True)
-                        await update_metrics('failed_tasks', 1)
-                    async with cache_lock:
-                        TASK_CACHE[task_hash] = {
-                            "status": "completed",
-                            "timestamp": time.time(),
-                            "result": None,
-                            "has_result": False
-                        }
-                    return await event.reply("❌ 处理回单时发生错误")
-                finally:
-                    if temp_dirs:
-                        cleanup_temp_dirs(temp_dirs)
-            except Exception as e:
-                async with cache_lock:
-                    if task_hash in TASK_CACHE:
-                        TASK_CACHE[task_hash] = {
-                            "status": "completed",
-                            "timestamp": time.time(),
-                            "result": None,
-                            "has_result": False
-                        }
-                log_error(f"任务执行异常: {e}", exc_info=True)
-                await update_metrics('failed_tasks', 1)
-                return await event.reply("❌ 处理请求时发生错误，请稍后重试")
-            finally:
-                # 记录任务结束时间并更新响应时间指标
-                task_control.end_time = time.time()
-                response_time = task_control.end_time - task_control.start_time
-                await update_metrics('average_response_time', response_time)
+            return await event.reply("❌ 处理回单时发生错误")
         finally:
-            # 恢复并发任务数指标
-            current_concurrent = metrics['concurrent_tasks']
-            await update_metrics('concurrent_tasks', max(0, current_concurrent - 1))
+            if temp_dirs:
+                cleanup_temp_dirs(temp_dirs)
+    except Exception as e:
+        async with cache_lock:
+            if task_hash in TASK_CACHE:
+                TASK_CACHE[task_hash] = {
+                    "status": "completed",
+                    "timestamp": time.time(),
+                    "result": None,
+                    "has_result": False
+                }
+        log_error(f"任务执行异常: {e}", exc_info=True)
+        return await event.reply("❌ 处理请求时发生错误，请稍后重试")
 
 
 # —— 通用请求处理 —— #
@@ -8203,15 +8004,12 @@ async def process_payback_request(event, name, count, credential_type):
             files_to_send.append((img_path, caption))
 
         # 并发发送
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_EMAILS)
+        semaphore = asyncio.Semaphore(5)
         
         async def send_file_task(img_path, caption):
             async with semaphore:
-                pdf_path = None
                 try:
-                    # 保存PDF路径用于后续删除
-                    pdf_path = img_path.rsplit('.', 1)[0] + '.pdf'
-
+                    # 假设client是一个已初始化的Telegram客户端实例
                     await client.send_file(
                         event.chat_id,
                         img_path,
@@ -8220,18 +8018,19 @@ async def process_payback_request(event, name, count, credential_type):
                         force_document=(count > 1)
                     )
                     logger.info(f"[{email_type.capitalize()}] 已发送回单: 收款人：{payee}   金额：{amount}")
+
+                    # 删除临时文件，添加异常处理
+                    try:
+                        if os.path.exists(img_path):
+                            os.remove(img_path)
+                            pdf_path = img_path.rsplit('.', 1)[0] + '.pdf'
+                            if os.path.exists(pdf_path):
+                                os.remove(pdf_path)
+                    except OSError as e:
+                        logger.error(f"删除临时文件 {img_path} 失败: {e}")
                         
                 except Exception as e:
                     logger.error(f"发送回单失败: {e}")
-                finally:
-                    # 确保临时文件被删除，无论发送成功与否
-                    try:
-                        if img_path and os.path.exists(img_path):
-                            os.remove(img_path)
-                        if pdf_path and os.path.exists(pdf_path):
-                            os.remove(pdf_path)
-                    except OSError as e:
-                        logger.error(f"删除临时文件 {img_path} 失败: {e}")
         
         await asyncio.gather(*[send_file_task(img, cap) for img, cap in files_to_send])
 
@@ -8265,7 +8064,7 @@ async def process_payback_request(event, name, count, credential_type):
     
     finally:
         # 清理临时目录
-        if 'temp_dirs' in locals() and temp_dirs:
+        if temp_dirs:
             cleanup_temp_dirs(temp_dirs)
 
 async def process_payback_with_payee_request(event, payer_name, payee_name, count):
@@ -8277,6 +8076,8 @@ async def process_fastmail_pay_request(event, payer_name, payee_name, count):
     await fetch_combined_receipts(event, payer_name, payee_name, count)
 
 
+# —— 命令处理与事件响应 —— #
+from telethon import events, TelegramClient
 
 # 设置FastMail凭证命令
 @client.on(events.NewMessage(pattern=r'^设置FastMail代付凭证\s+(\S+)\s+(\S+)$', incoming=True))
@@ -8431,17 +8232,8 @@ async def fetch_email_pay_only_payer_basic(event):
 
 # 启动定期清理任务
 async def start_background_tasks():
-    # 确保导入logging
-    import logging
-    global logger
-    logger = logging.getLogger(__name__)
-    
-    # 确保启动所有后台任务
-    task1 = asyncio.create_task(periodic_cleanup_pdf_cache())
-    task2 = asyncio.create_task(periodic_cleanup_connection_pools())
-    task3 = asyncio.create_task(log_metrics())
-    await asyncio.gather(task1, task2, task3)
-
+    asyncio.create_task(periodic_cleanup_pdf_cache())
+    asyncio.create_task(periodic_cleanup_connection_pools())
 
 
 
@@ -8931,7 +8723,7 @@ async def main():
         # 替换为保留的连接池清理任务：periodic_cleanup_connection_pools
         task_cleanup_connections = asyncio.create_task(periodic_cleanup_connection_pools())
         tasks.append(task_cleanup_connections)
-        logger.info("✅ 连接池定时清理任务已启动（每2分钟执行一次）")
+        logger.info("✅ 连接池定时清理任务已启动（每5分钟执行一次）")
         
         # 原有任务：清理代付缓存
         task_clean_payback = asyncio.create_task(clean_payback_cache())
@@ -9072,7 +8864,7 @@ async def daily_reset_forward_counts(initial_seconds_until_midnight):
 
                 # 第四步：完整性校验（原有逻辑保留）
                 if id_updated:
-                    logger.info("✅ 开始执行ID变更后的完整性校验...")
+                    logger.info("🔍 开始执行ID变更后的完整性校验...")
                     
                     # 校验1：清理无效分组
                     async with db.execute("""
@@ -9227,7 +9019,7 @@ async def load_group_data_on_startup():
         
         
 # ────────────────────────────
-# 入口函数（修改后）
+# 入口函数（保持不变）
 # ────────────────────────────
 if __name__ == "__main__":
     # Windows CMD 不支持 ANSI 颜色，可在此关闭彩色日志
@@ -9242,20 +9034,6 @@ if __name__ == "__main__":
         # 运行异步主函数
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("程序已被用户终止。")
-        # 主动终止时可选择不阻塞（或保留提示）
-        # input("按任意键关闭窗口...")  # 可选：如需阻塞可取消注释
+        print("程序已终止。")
     except Exception as e:
-        # 1. 用日志记录错误（保留原有逻辑）
         logger.error(f"程序异常退出: {e}", exc_info=True)
-        
-        # 2. 强制在控制台打印完整错误堆栈（确保用户能看到）
-        print("\n" + "="*60)
-        print("⚠️ 程序崩溃！以下是详细错误信息：")
-        traceback.print_exc()  # 直接打印到控制台，不受日志配置影响
-        print("="*60 + "\n")
-        
-        # 3. 阻塞窗口，等待用户按键后再关闭（关键：防止窗口自动消失）
-        input("按任意键关闭窗口...")
-    finally:
-        sys.exit(0)
