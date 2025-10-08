@@ -2,6 +2,8 @@
 # ==============================================
 # 单文件全自动依赖处理 + 赛博朋克风格彩色日志（最终优化版）
 # ==============================================
+
+# ---------------------------- 基础导入（核心依赖检测前的必要导入） ----------------------------
 import sys
 import subprocess
 import importlib
@@ -14,7 +16,8 @@ import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 
-# ---------------------------- 日志配置等相关函数（无依赖导入） ----------------------------
+
+# ---------------------------- 日志配置基础函数（无第三方依赖） ----------------------------
 def setup_logger():
     """初始化日志系统，确保只添加一次处理器，防止重复输出"""
     logger = logging.getLogger("tg_bot")
@@ -26,15 +29,16 @@ def setup_logger():
 
     # 初始使用默认格式化器（无颜色），后续安装colorama后替换
     console_handler = logging.StreamHandler(sys.stdout)
-    # 移除日志格式中的换行，使用紧凑格式
     console_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
     logger.addHandler(console_handler)
 
     return logger
 
-# 初始化全局日志对象
+# 初始化全局日志对象（基础版，后续会补充彩色配置）
 logger = setup_logger()
 
+
+# ---------------------------- 临时文件清理函数 ----------------------------
 def _cleanup_temp_files():
     """清理可能生成的临时文件和目录"""
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +55,8 @@ def _cleanup_temp_files():
         except Exception as e:
             logger.warning(f"清理临时文件时出错: {str(e)}")
 
+
+# ---------------------------- 环境路径处理函数 ----------------------------
 def _force_standard_paths():
     """强制添加所有标准Python路径，确保site-packages被正确识别"""
     python_exe = os.path.abspath(sys.executable)
@@ -73,6 +79,7 @@ def _force_standard_paths():
     
     return python_exe
 
+
 def _force_correct_python_env() -> str:
     """获取当前Python路径并确保路径正确"""
     python_exe = _force_standard_paths()
@@ -88,6 +95,8 @@ def _force_correct_python_env() -> str:
     
     return f'"{python_exe}"'
 
+
+# ---------------------------- 依赖检测与安装函数 ----------------------------
 def _is_package_installed(pkg_name, required_version):
     """
     优化依赖检测逻辑：
@@ -99,7 +108,8 @@ def _is_package_installed(pkg_name, required_version):
         "protobuf": "google.protobuf",
         "PyMuPDF": "fitz",  # 关键映射：安装PyMuPDF = 可用fitz模块
         "opencv-python": "cv2",
-        "google-api-python-client": "googleapiclient"
+        "google-api-python-client": "googleapiclient",
+        "psutil": "psutil"
     }
     
     check_names = [pkg_name]
@@ -154,6 +164,7 @@ def _is_package_installed(pkg_name, required_version):
     logger.debug(f"{pkg_name} 未安装或无法检测到")
     return False
 
+
 def _install_deps_step_by_step(missing_deps: list):
     """分步安装缺失依赖（日志优化：彻底解决换行和过长问题）"""
     if not missing_deps:
@@ -163,7 +174,6 @@ def _install_deps_step_by_step(missing_deps: list):
     pip_cmd = f"{python_cmd} -m pip"
     mirror_config = "-i https://pypi.doubanio.com/simple/ -i https://pypi.tuna.tsinghua.edu.cn/simple/ --trusted-host pypi.doubanio.com --trusted-host pypi.tuna.tsinghua.edu.cn"
     
-    # 合并成一行显示，不换行
     logger.info(f"开始安装缺失依赖（共{len(missing_deps)}个）")
     
     failed = []
@@ -176,10 +186,8 @@ def _install_deps_step_by_step(missing_deps: list):
             pkg_name = dep.split("==")[0].strip()
             install_dep = dep
 
-        # 一行显示当前安装进度，不换行
         logger.info(f"--- 第{idx}/{len(missing_deps)}个：{dep} ---")
         no_deps = "--no-deps" if pkg_name in ["google-auth-oauthlib", "protobuf"] else ""
-        # 添加--no-warn-script-location参数减少脚本安装提示
         install_cmd = f"{pip_cmd} install --upgrade {mirror_config} {no_deps} {install_dep} --timeout 300 --no-cache-dir --no-warn-script-location"
         
         try:
@@ -200,28 +208,24 @@ def _install_deps_step_by_step(missing_deps: list):
                 "Successfully installed": "✅ 安装成功",
                 "Requirement already satisfied": "✅ 已存在依赖"
             }
-            download_size = ""  # 存储下载文件大小信息
+            download_size = ""
             while True:
                 output = process.stdout.readline()
                 if output == '' and process.poll() is not None:
                     break
                 if output:
                     line = output.strip()
-                    # 过滤所有无关信息
                     if any(key in line for key in ["Looking in indexes", "[notice]", "https://", "http://", "---", "from", "in"]):
                         continue
-                    # 提取下载大小（去掉链接）
                     if "Downloading" in line and "(" in line and ")" in line:
                         download_size = f"（{line.split('(')[-1].split(')')[0]}）"
                         continue
-                    # 替换英文关键词并优化显示
                     for en_key, cn_val in en_to_cn.items():
                         if en_key in line:
                             if en_key == "Downloading":
                                 logger.info(f"{cn_val} {pkg_name} {download_size}")
                             else:
                                 if en_key == "Requirement already satisfied":
-                                    # 只显示包名，不显示路径
                                     dep_path = line.split(":")[-1].strip().split("==")[0]
                                     dep_name = dep_path.split('/')[-1].split('\\')[-1]
                                     logger.info(f"{cn_val}：{dep_name}")
@@ -229,7 +233,6 @@ def _install_deps_step_by_step(missing_deps: list):
                                     dep_list = line.replace(en_key, "").strip()
                                     logger.info(f"{cn_val}：{dep_list}")
                                 else:
-                                    # 先处理路径，再放入日志
                                     processed_line = line.replace(en_key, "").strip()
                                     processed_line = processed_line.split('/')[-1].split('\\')[-1]
                                     logger.info(f"{cn_val}：{processed_line}")
@@ -237,7 +240,6 @@ def _install_deps_step_by_step(missing_deps: list):
             
             if process.poll() == 0:
                 logger.info(f"✅ 依赖安装完成：{dep}")
-                # 安装完成后清理可能生成的临时文件
                 _cleanup_temp_files()
                 time.sleep(1)
             else:
@@ -250,13 +252,11 @@ def _install_deps_step_by_step(missing_deps: list):
             try:
                 subprocess.run(install_cmd, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 logger.info(f"✅ 重试成功：{dep}")
-                # 安装完成后清理可能生成的临时文件
                 _cleanup_temp_files()
             except:
                 logger.error(f"❌ 重试失败：{dep}")
                 failed.append(dep)
     
-    # 全部安装完成后再次清理
     _cleanup_temp_files()
     
     if failed:
@@ -266,6 +266,7 @@ def _install_deps_step_by_step(missing_deps: list):
         return True
     
     return True
+
 
 def _check_and_fix_deps():
     """检测并修复所有依赖（解决日志过长和换行问题）"""
@@ -284,17 +285,17 @@ def _check_and_fix_deps():
         "pyotp==2.9.0",
         "pytz==2025.2",
         "Telethon==1.39.0",
-        "requests==2.32.3"  
+        "requests==2.32.3",
+        "psutil==5.9.8"
     ]
     
     _force_standard_paths()
     
-    # 紧凑显示标题，减少分隔符长度
+    # 环境检测日志输出
     logger.info("="*40)
     logger.info("      🔍 检测脚本运行环境（精简版）")
     logger.info("="*40)
     logger.info(f"Python路径：{os.path.abspath(sys.executable)}")
-    # 合并Python版本和依赖路径的标题行
     logger.info(f"Python版本：{sys.version.split()[0]}     有效依赖路径（前3个）：")
     for i, path in enumerate(sys.path[:3]):
         logger.info(f"   {i+1}. {path}")
@@ -315,7 +316,7 @@ def _check_and_fix_deps():
         else:
             missing.append(dep)
     
-    # 显示已安装和缺失的依赖（每条单独一行）
+    # 显示依赖检测结果
     if installed:
         logger.info(f"✅ 已安装依赖（共{len(installed)}个）：")
         for dep in installed:
@@ -334,46 +335,14 @@ def _check_and_fix_deps():
     logger.info("✅ 开始自动安装缺失依赖...")
     return _install_deps_step_by_step(missing)
 
+
 # ---------------------------- 执行环境检测与修复 ----------------------------
 try:
     # 先清理可能存在的临时文件
     _cleanup_temp_files()
     _check_and_fix_deps()
     
-    # 依赖安装完成后，导入colorama并配置彩色日志
-    from colorama import init, Fore, Back
-    init(autoreset=True)
-    
-    # 重新配置彩色日志
-    logger = logging.getLogger("tg_bot")
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
-    
-    # 赛博朋克风格颜色映射
-    def log_color(level: int) -> str:
-        if level == logging.DEBUG:
-            return Fore.MAGENTA
-        elif level == logging.INFO:
-            return Fore.CYAN
-        elif level == logging.WARNING:
-            return Fore.LIGHTYELLOW_EX
-        elif level == logging.ERROR:
-            return Fore.LIGHTRED_EX
-        elif level == logging.CRITICAL:
-            return Fore.BLACK + Back.MAGENTA
-        else:
-            return Fore.LIGHTBLACK_EX
-    
-    class ColorFormatter(logging.Formatter):
-        def format(self, record: logging.LogRecord) -> str:
-            return f"{log_color(record.levelno)}{super().format(record)}"
-    
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(ColorFormatter("%(asctime)s - %(levelname)s - %(message)s"))
-    logger.addHandler(console_handler)
-    logger.setLevel(logging.INFO)
-    
-    # ---------------------------- 脚本核心逻辑 ----------------------------
+    # 验证核心模块加载
     logger.info("✅ 脚本启动成功！所有依赖已正常加载（包括fitz模块）")
     try:
         import fitz
@@ -393,11 +362,10 @@ finally:
 # 模块导入（按类型分组，去重优化）
 # ==============================================
 
-# ---------------------------- 启动加速与日志 ----------------------------
-import time
-import logging
+# ---------------------------- 启动计时与日志 ----------------------------
 _t0 = time.perf_counter()
 logger.info("✅ 脚本启动，正在加载依赖…")
+
 
 # ---------------------------- 标准库（Python自带，无需安装） ----------------------------
 import os
@@ -412,49 +380,60 @@ import ctypes
 import shutil  # 用于清理文件
 import re 
 import asyncio
-import imaplib  # 标准库，无需额外安装
+import imaplib  # 邮件协议处理
 import functools
 import urllib.parse
-from typing import List, Tuple, Dict, Any, Optional  # 合并重复的typing导入
+import psutil  # 系统资源监控
+import threading  # 多线程支持
+from typing import List, Tuple, Dict, Any, Optional  # 类型注解
 from time import monotonic
 from email import policy
 import unicodedata
 from datetime import datetime, timezone, timedelta
 from email.utils import parsedate_to_datetime
 from collections import defaultdict, deque
-import base64  # 用于base64编码
-import sqlite3
+import base64  # 编码处理
+import sqlite3  # 数据库支持
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from imapclient import imap_utf7
+from pathlib import Path  # 路径处理
+from imapclient import imap_utf7  # 邮件编码处理
 from email.parser import BytesParser  # 邮件解析
 from email import policy as email_policy  # 邮件解析策略
 
+
 # ---------------------------- 第三方库（需通过pip安装，已在REQUIRED_DEPS中声明） ----------------------------
-import pyotp
-import aiosqlite
-import cv2
-import pytz
-from aiolimiter import AsyncLimiter
-from colorama import Fore, Back, init  # 用于终端颜色输出
-from pydrive.auth import GoogleAuth
-from pydrive.drive import GoogleDrive
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+# Google相关服务
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from google.auth.exceptions import RefreshError
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+# 其他第三方库
+import pyotp  # 验证码生成
+import aiosqlite  # 异步SQLite
+import cv2  # 图像处理
+import pytz  # 时区处理
+from aiolimiter import AsyncLimiter  # 异步限流
+from colorama import Fore, Back, init  # 终端彩色输出
+from pydrive.auth import GoogleAuth  # Google Drive认证
+from pydrive.drive import GoogleDrive  # Google Drive操作
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # 异步定时任务
+
 
 # ---------------------------- 懒加载体积较大的第三方库 ----------------------------
-import sys
-
 class _LazyModule:
     def __init__(self, name):
         self._name = name
         self._mod = None
 
     def __getattr__(self, item):
-        if self._mod is None:                       # 第一次真正导入
+        if self._mod is None:  # 第一次真正导入
             start = time.perf_counter()
             import importlib
-            # 暂时把自己从 sys.modules 移除，避免递归
+            # 暂时从sys.modules移除，避免递归
             placeholder = sys.modules.get(self._name)
             if placeholder is self:
                 del sys.modules[self._name]
@@ -467,11 +446,12 @@ class _LazyModule:
                         self._name, time.perf_counter() - start)
         return getattr(self._mod, item)
 
-# 把 “fitz” 注册为惰性模块；只有第一次用到时才真的 import
+# 懒加载fitz（PyMuPDF），减少启动时间
 sys.modules["fitz"] = _LazyModule("fitz")
-import fitz  # 延迟加载，实际使用时才会真正导入
+import fitz  # 实际使用时才会真正导入
 
-# ---------------------------- Telegram 相关（Telethon库，已在依赖中） ----------------------------
+
+# ---------------------------- Telegram 相关（Telethon库） ----------------------------
 from telethon import TelegramClient, events, errors, utils
 from telethon.events import NewMessage
 from telethon.tl import types, functions
@@ -500,15 +480,111 @@ from telethon.errors import (
     ChannelPrivateError
 )
 
+
+# ==============================================
+# 日志与异常处理配置（依赖加载完成后）
+# ==============================================
+
+# 初始化colorama（终端彩色输出）
+init(autoreset=True)
+
+class ColorFormatter(logging.Formatter):
+    """彩色日志格式化器"""
+    def format(self, record):
+        color = Fore.CYAN
+        if record.levelno == logging.DEBUG:
+            color = Fore.MAGENTA
+        elif record.levelno == logging.INFO:
+            color = Fore.CYAN
+        elif record.levelno == logging.WARNING:
+            color = Fore.LIGHTYELLOW_EX
+        elif record.levelno == logging.ERROR:
+            color = Fore.LIGHTRED_EX
+        elif record.levelno == logging.CRITICAL:
+            color = Fore.BLACK + Back.MAGENTA
+        return color + super().format(record)
+
+# 优化日志配置（替换基础版配置）
+logger = logging.getLogger("tg_bot")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+
+# 清除已有处理器，避免重复输出
+for h in logger.handlers[:]:
+    logger.removeHandler(h)
+
+# ---------------------------- 核心修改：只保留当天日志（无多文件） ----------------------------
+# 使用普通FileHandler，但添加每日清空机制
+file_handler = logging.FileHandler("bot.log", encoding="utf-8")
+file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(file_handler)
+
+# 添加每日凌晨清空日志的定时任务
+async def clear_log_file():
+    """清空日志文件内容（保留文件本身）"""
+    try:
+        # 临时移除文件处理器，避免清空时写入冲突
+        logger.removeHandler(file_handler)
+        # 清空文件（截断为0字节）
+        with open("bot.log", "w", encoding="utf-8") as f:
+            f.truncate()
+        # 重新添加处理器
+        logger.addHandler(file_handler)
+        logger.info("✅ 日志文件已清空（保留当天记录）")
+    except Exception as e:
+        logger.error(f"清空日志失败：{str(e)}")
+
+# 初始化定时任务调度器
+scheduler = AsyncIOScheduler()
+# 每天凌晨0点执行清空操作（指定pytz时区）
+scheduler.add_job(
+    clear_log_file,
+    trigger="cron",
+    hour=0,
+    minute=0,
+    timezone=pytz.timezone('Asia/Shanghai')  # 可替换为你的时区，如pytz.utc
+)
+scheduler.start()
+
+# ---------------------------- 控制台输出配置 ----------------------------
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(ColorFormatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(console_handler)
+
+# 调整telethon日志级别（减少冗余输出）
+logging.getLogger('telethon').setLevel(logging.WARNING)
+
+
+# ---------------------------- 全局异常钩子 ----------------------------
+import traceback
+def global_exception_hook(exctype, value, tb):
+    """全局异常捕获，统一处理未捕获的异常"""
+    print("\n======[全局异常捕获]======")
+    print("异常类型:", exctype)
+    print("异常内容:", value)
+    traceback.print_tb(tb)
+    input("程序异常，按任意键关闭窗口...")
+
+sys.excepthook = global_exception_hook
+
+
+# ---------------------------- 资源监控线程 ----------------------------
+def monitor_resource():
+    """定时监控系统资源使用情况"""
+    while True:
+        process = psutil.Process()
+        mem = process.memory_info().rss / 1024 / 1024  # MB
+        cpu = process.cpu_percent(interval=1)
+        disk = psutil.disk_usage('.').percent
+        logger.info(f"[资源监控] 内存:{mem:.2f}MB, CPU:{cpu}%, 磁盘:{disk}%")
+        time.sleep(600)  # 每10分钟记录一次
+
+# 启动资源监控线程（后台运行）
+threading.Thread(target=monitor_resource, daemon=True).start()
+
 # ---------------------------- 初始化（保留原逻辑） ----------------------------
 # 获取当前时间并指定 UTC 时区
 current_time = datetime.now(timezone(timedelta(hours=8)))  # 设置为 UTC+8 时区
-    
-    
-    
-
-# ---------------------------- 正则表达式模板（业务字段提取） ----------------------------
-# 用于提取支付相关字段（付款方/收款方/金额/时间/流水号等）
 PAT = {
     "payer_name"   : re.compile(r"付款方[^\n]*?账户名[:：]\s*([^\n]+)"),
     "payee_name"   : re.compile(r"收款方[^\n]*?账户名[:：]\s*([^\n]+)"),
@@ -597,8 +673,6 @@ else:
     }
 
 
-
-
 #---------------------------- 数据库操作：群组 ID 查询（按类型筛选） ----------------------------
 async def get_group_ids_by_type(group_type):
     db = await DB.get_conn()
@@ -616,10 +690,6 @@ async def get_appendix_for_text(text):
             if keyword in text:
                 return content
     return ""  # 如果没有匹配的附文，返回空字符串
-
-
-
-
 
 # ---------------------------- 数据库核心工具类（封装通用操作） ----------------------------
 class DBHelper:
@@ -743,10 +813,6 @@ class GroupDAO:
         rows = await self.db.fetch_all(sql, (chat_id,))
         return [row[0] for row in rows]
 
-
-
-
-
 # ---------------------------- 并发控制（信号量限制） ----------------------------
 # 控制并发执行的信号量
 semaphore = asyncio.BoundedSemaphore(config.get("max_concurrency", 10))
@@ -754,7 +820,6 @@ semaphore = asyncio.BoundedSemaphore(config.get("max_concurrency", 10))
 async def limited_run(coro_func, *args, **kwargs):
     async with semaphore:
         return await coro_func(*args, **kwargs)
-
 
 # ---------------------------- 数据库连接池与基础操作 ----------------------------
 # 数据库连接池实现
@@ -813,7 +878,6 @@ async def execute_write(query: str, *params) -> None:
 
 # 保持旧名兼容
 execute_query = fetch_all   # type: ignore
-
 
 # ---------------------------- Google 验证密钥数据访问（GASecretDAO） ----------------------------
 class GASecretDAO:
@@ -886,7 +950,6 @@ class GASecretDAO:
             for row in await fetch_all("SELECT name, secret FROM ga_secrets")
         ]
 
-
 # ---------------------------- Telegram API 限流控制 ----------------------------
 # 2. Request Limiting for Telegram API
 limiter = AsyncLimiter(MAX_MSGS_PER_SEC, LIMIT_WINDOW_SEC)
@@ -896,11 +959,9 @@ async def send_message_with_limit(client, chat_id, message):
     async with limiter:
         await client.send_message(chat_id, message)
 
-
 # ---------------------------- CPU 密集型任务处理（线程池） ----------------------------
 # 3. CPU-Intensive Tasks → ThreadPool
 ThreadPoolExecutor(max_workers=MAX_WORKERS)
-
 
 def cpu_intensive_task(data):
     return sum(x * x for x in data)  # 示例计算
@@ -908,7 +969,6 @@ def cpu_intensive_task(data):
 async def handle_cpu_task(data):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, cpu_intensive_task, data)
-
 
 # ---------------------------- 网络请求重试工具 ----------------------------
 # 4. Retry helper --------------------------------------------------
@@ -921,7 +981,6 @@ async def retry_request(request_func, retries=5, delay=2):
                 raise e
             await asyncio.sleep(delay + random.uniform(0, 2))
 
-
 # ---------------------------- 异步临界区锁 ----------------------------
 # 5. Async lock for critical section ------------------------------
 lock = asyncio.Lock()
@@ -932,18 +991,12 @@ async def critical_section(task_id):
         await asyncio.sleep(1)
         logging.info(f"任务 {task_id} 完成临界区操作")
 
-
 # ---------------------------- 控制台输出辅助函数 ----------------------------
 def print_task_operation(task_name, details):
     print(f"【任务操作】{task_name}: {details}", file=sys.stdout)
 
 def print_admin_operation(admin_id, operation, target_id=None, details=""):
     print(f"【管理员操作】管理员 {admin_id} 执行 {operation}，目标: {target_id}，详情: {details}", file=sys.stdout)
-
-
-
-
-
 
 
 # ---------------------------- 目录与缓存初始化 ----------------------------
@@ -1021,7 +1074,6 @@ BOT_USER_ID: int | None = None  # 机器人用户ID（登录后初始化）
 start_time = int(time.time())  # 脚本启动时间戳（用于过滤启动前的历史消息）
 
 
-
 # ---------------------------- 数据库配置与连接池 ----------------------------
 # 增强型全局数据库连接池，支持异步和多线程安全
 class DB:
@@ -1038,11 +1090,9 @@ class DB:
                 await cls._conn.execute("PRAGMA busy_timeout=5000")  # 数据库繁忙时等待5秒
             return cls._conn
 
-
 # ---------------------------- 线程池配置 ----------------------------
 # 创建共享线程池执行器
 thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS)
-
 
 # ---------------------------- 数据库表初始化 ----------------------------
 async def init_all_tables():
@@ -1363,9 +1413,6 @@ async def view_admins(event):
         logger.info(f"管理员 {event.sender_id} 查看了管理员列表")
 
 
-
-
-
 # ---------------------------- 机器人客户端初始化 ----------------------------
 
 async def initialize_bot():
@@ -1443,8 +1490,7 @@ async def handle_bot_join(event):
         asyncio.create_task(_save_group_join_time(chat_id, current_time))
         logger.info(f"机器人 {bot_user_id} 加入群组 {chat_id}，记录时间 {current_time}")
         
-        
-        
+
 # ---------------------------- 群组绑定与分组管理命令 ----------------------------
 
 # 绑定群组（默认未分组）
@@ -2648,22 +2694,13 @@ async def init_existing_collection_groups():
 pending_images = defaultdict(list)  # 待处理图片队列：{提示消息ID: [图片路径列表]}
 PENDING_SEND_DELAY = 2.0  # 图片发送延迟时间（秒）
 REPLY_PAYBACK_DELAY = 1.5  # 代付回复延迟时间（秒）
-PAYBACK_DEDUPE_INTERVAL = 60  # 代付操作去重间隔（秒）
 active_send_tasks = set()  # 活跃的图片发送任务集合
 recent_payback_records = dict()  # 近期代付操作记录：{键: 时间戳}
 recent_cd_responses = dict()  # 近期查单回复记录：{键: 时间戳}
 
-# ---------------------------- 缓存过期时间配置（分类管理，避免内存溢出） ----------------------------
-# 缓存操作锁
-cache_lock = asyncio.Lock()
-
-# 代付操作记录缓存过期时间（建议30-60秒，用于防止重复触发）
-PAYBACK_RECORD_EXPIRE_SECONDS = 60
-
-# 图片缓存过期时间（建议30-60秒，用于临时存储待发送的图片）
-IMAGE_CACHE_EXPIRE_SECONDS = 60
-
-# 黑名单缓存配置
+# 新增优化相关变量
+cache_lock = asyncio.Lock()  # 缓存操作锁
+CACHE_EXPIRE_SECONDS = 30  # 缓存过期时间(30秒)
 blacklist_cache = set()      # 黑词缓存集合
 blacklist_last_refresh = 0   # 黑词缓存最后刷新时间戳
 BLACKLIST_REFRESH_INTERVAL = 300  # 黑词缓存刷新间隔（秒）
@@ -2687,28 +2724,18 @@ _instruction_map = {
     "撤回": "代付撤单",
 }
 
-# ---------------------------- 代付操作缓存定期清理任务 ----------------------------
-async def clean_expired_payback_cache():
-    """
-    定期清理过期的代付操作记录和图片缓存，防止内存溢出
-    
-    清理策略：
-    - 代付操作记录：60秒后过期（用于防止重复触发）
-    - 图片缓存：60秒后过期（用于临时存储待发送的图片）
-    - 执行周期：每60秒清理一次
-    """
+# 新增：定时清理过期缓存的任务
+async def clean_expired_cache():
+    """定期清理过期缓存，防止内存溢出"""
     while True:
         try:
             current_time = monotonic()
             async with cache_lock:
-                # 清理过期的代付操作记录（仅清理时间戳类型的记录）
-                expired_keys = []
-                for key, value in recent_payback_records.items():
-                    # 只清理值为时间戳的记录（float/int类型）
-                    if isinstance(value, (int, float)):
-                        if current_time - value > PAYBACK_RECORD_EXPIRE_SECONDS:
-                            expired_keys.append(key)
-                
+                # 清理过期的代付操作记录
+                expired_keys = [
+                    key for key, timestamp in recent_payback_records.items()
+                    if current_time - timestamp > CACHE_EXPIRE_SECONDS
+                ]
                 for key in expired_keys:
                     del recent_payback_records[key]
                 
@@ -2716,25 +2743,14 @@ async def clean_expired_payback_cache():
                 expired_tip_ids = []
                 for tip_id in pending_images:
                     create_time = recent_payback_records.get((tip_id, "create_time"), 0)
-                    if create_time > 0 and current_time - create_time > IMAGE_CACHE_EXPIRE_SECONDS:
+                    if current_time - create_time > CACHE_EXPIRE_SECONDS:
                         expired_tip_ids.append(tip_id)
                 
                 for tip_id in expired_tip_ids:
-                    # 清理图片缓存及相关元数据
                     del pending_images[tip_id]
-                    recent_payback_records.pop((tip_id, "orders"), None)
-                    recent_payback_records.pop((tip_id, "order"), None)
-                    recent_payback_records.pop((tip_id, "group"), None)
-                    recent_payback_records.pop((tip_id, "first_trigger_msg_id"), None)
-                    recent_payback_records.pop((tip_id, "is_bot_sender"), None)
-                    recent_payback_records.pop((tip_id, "create_time"), None)
-                
-                # 日志输出清理结果（仅在有清理时输出）
-                if expired_keys or expired_tip_ids:
-                    logger.debug(f"[缓存清理] 代付记录: {len(expired_keys)}条, 图片缓存: {len(expired_tip_ids)}个")
             
-            # 每60秒清理一次
-            await asyncio.sleep(60)
+            # 每小时清理一次
+            await asyncio.sleep(3600)
         except Exception as e:
             logger.error(f"[代付] 缓存清理任务失败: {e}")
             await asyncio.sleep(60)  # 出错后缩短间隔重试
@@ -6011,12 +6027,6 @@ async def leave_group_cancel(event):
     )
     
 
-
-
-    
-    
-    
-
 # ---------------------------- 消息通知功能公共工具函数 ----------------------------
 async def verify_group_and_permissions(event):
     """
@@ -6207,10 +6217,6 @@ async def delete_mention(event):
 
 
 
-
-
-
-
 # —— 常量定义 —— #
 # Telegram配置
 MAX_CAPTION_LENGTH = 1024  # 最大标题长度
@@ -6224,19 +6230,9 @@ CREDENTIALS_FILES = {
     }
 }
 
-# 数据库配置
-DB_PATH = "database.db"
 
-# ---------------------------- 回单查询缓存配置（分类管理） ----------------------------
-# 任务状态缓存过期时间（建议5-10分钟，用于防止重复任务）
-TASK_CACHE_EXPIRE_SECONDS = 600  # 10分钟
-
-# PDF文本缓存过期时间（建议24小时，用于避免重复解析PDF）
-PDF_CACHE_EXPIRE_SECONDS = 86400  # 24小时
-
-# 缓存存储
-_pdf_text_cache = {}  # 全局PDF文本缓存：{文件路径: {'data': 文本内容, 'timestamp': 时间戳}}
-TASK_CACHE = {}  # 任务状态缓存：{任务哈希: {'status': 状态, 'timestamp': 时间戳, 'result': 结果, 'has_result': 是否有结果}}
+# 缓存配置
+TASK_CACHE = {}  # 任务状态缓存：存储任务哈希及状态
 
 # 连接池配置
 GMAIL_SERVICE_POOL = {
@@ -6248,16 +6244,14 @@ GMAIL_SERVICE_POOL = {
 FASTMAIL_CONN_POOL = {
     'connections': {},
     'last_used': {},
-    'max_connections': 3,
+    'max_connections': 5,
     'timeout': 300
 }
 
 # 正则表达式
 NAME_PATTERN = re.compile(r'^[\u4e00-\u9fa5a-zA-Z·\-\']+[·\-\']?[\u4e00-\u9fa5a-zA-Z]*$')  # 姓名验证
 
-
 # —— 全局变量与锁 —— #
-cache_lock = asyncio.Lock()  # 异步锁确保缓存操作安全
 gmail_service_lock = asyncio.Lock()  # Gmail服务创建的线程安全锁
 
 
@@ -6644,20 +6638,6 @@ def process_pdf_attachment(pdf_bytes: bytes, out_dir: str, source: str, original
 
 
 # —— Gmail 相关功能 —— #
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from google.auth.exceptions import RefreshError
-from google_auth_oauthlib.flow import InstalledAppFlow
-
-CREDENTIALS_FILES = {
-    'pay': {
-        'client_secret': 'client_secret_pay.json',
-        'token': 'token_pay.json'
-    }
-}
-
 # 凭证管理
 async def load_credentials_from_files(credential_type: str) -> dict:
     config = CREDENTIALS_FILES.get(credential_type)
@@ -7569,147 +7549,71 @@ def generate_task_hash(payer_name, payee_name, count, email_type=None):
     task_str = f"{norm_email_type}|{norm_payer}|{norm_payee}|{count}"
     return hashlib.md5(task_str.encode()).hexdigest()
 
-async def clean_expired_task_cache():
-    """
-    清理过期的任务缓存
-    
-    清理策略：
-    - 任务缓存：10分钟后过期（用于防止短时间内重复执行相同任务）
-    - 执行周期：每5分钟清理一次
-    """
-    while True:
-        try:
-            await asyncio.sleep(300)  # 每5分钟执行一次清理
-            now = time.time()
-            expired_hashes = [
-                task_hash for task_hash, data in TASK_CACHE.items()
-                if now - data["timestamp"] > TASK_CACHE_EXPIRE_SECONDS
-            ]
-            for task_hash in expired_hashes:
-                del TASK_CACHE[task_hash]
-            
-            # 日志输出清理结果（仅在有清理时输出）
-            if expired_hashes:
-                logger.debug(f"[缓存清理] 任务缓存: {len(expired_hashes)}个")
-        except Exception as e:
-            logger.error(f"[任务缓存] 清理失败: {e}")
+async def clean_expired_cache():
+    """清理过期缓存"""
+    now = time.time()
+    expired_hashes = [
+        task_hash for task_hash, data in TASK_CACHE.items()
+        if now - data["timestamp"] > CACHE_EXPIRE_SECONDS
+    ]
+    for task_hash in expired_hashes:
+        del TASK_CACHE[task_hash]
 
 async def periodic_cleanup_pdf_cache():
-    """
-    定期清理过期的PDF文本缓存
-    
-    清理策略：
-    - PDF文本缓存：24小时后过期（用于避免重复解析相同的PDF文件）
-    - 执行周期：每小时清理一次
-    """
+    """定期清理过期的PDF文本缓存"""
     while True:
-        try:
-            await asyncio.sleep(3600)  # 每小时执行一次清理
-            now = time.time()
-            # 清理超过24小时的缓存项
-            expired_keys = [
-                key for key, entry in _pdf_text_cache.items()
-                if now - entry['timestamp'] > PDF_CACHE_EXPIRE_SECONDS
-            ]
-            for key in expired_keys:
-                del _pdf_text_cache[key]
-            
-            # 日志输出清理结果（仅在有清理时输出）
-            if expired_keys:
-                logger.info(f"[缓存清理] PDF文本缓存: {len(expired_keys)}个")
-        except Exception as e:
-            logger.error(f"[PDF缓存] 清理失败: {e}")
+        now = time.time()
+        # 清理超过24小时的缓存项
+        expired_keys = [
+            key for key, entry in _pdf_text_cache.items()
+            if now - entry['timestamp'] > 86400  # 24小时
+        ]
+        for key in expired_keys:
+            del _pdf_text_cache[key]
+        if expired_keys:
+            logger.info(f"清理了 {len(expired_keys)} 个过期的PDF缓存项")
+        # 每小时执行一次清理
+        await asyncio.sleep(3600)
 
 async def periodic_cleanup_connection_pools():
-    """定期清理连接池中的闲置连接和无效连接"""
-    
-    def is_gmail_service_valid(service):
-        """验证Gmail服务是否有效"""
-        try:
-            # 发送轻量请求测试连接
-            service.users().getProfile(userId='me').execute()
-            return True
-        except Exception as e:
-            logger.warning(f"Gmail连接无效: {str(e)}")
-            return False
-
-    def is_fastmail_conn_valid(conn):
-        """验证FastMail IMAP连接是否有效"""
-        try:
-            # 发送NOOP命令检查连接状态
-            status, _ = conn.noop()
-            return status == 'OK'
-        except Exception as e:
-            logger.warning(f"FastMail连接无效: {str(e)}")
-            return False
-
+    """定期清理连接池中的闲置连接"""
     while True:
         now = time.time()
         
-        # 清理Gmail连接池（逐个处理，记录详细日志）
-        gmail_keys = list(GMAIL_SERVICE_POOL['last_used'].keys())
-        for key in gmail_keys:
-            # 计算闲置时间
-            last_used = GMAIL_SERVICE_POOL['last_used'].get(key, 0)
-            idle_time = now - last_used
-            
-            # 检查连接是否存在（防止并发操作导致的键已被删除）
-            if key not in GMAIL_SERVICE_POOL['connections']:
-                continue
-                
-            # 判断清理原因
-            is_timeout = idle_time > GMAIL_SERVICE_POOL['timeout']
-            is_invalid = not is_gmail_service_valid(GMAIL_SERVICE_POOL['connections'][key])
-            
-            if is_timeout or is_invalid:
-                try:
-                    # 关闭连接
-                    GMAIL_SERVICE_POOL['connections'][key].close()
-                except Exception as e:
-                    logger.error(f"关闭Gmail连接 {key} 失败: {e}")
-                
-                # 移除连接
-                del GMAIL_SERVICE_POOL['connections'][key]
-                del GMAIL_SERVICE_POOL['last_used'][key]
-                
-                # 输出详细日志（区分过期/无效原因）
-                reason = "过期的" if is_timeout else "无效的"
-                logger.info(f"[Gmail] 清理{reason}Gmail连接 (闲置时间: {idle_time:.1f}秒)")
+        # 清理Gmail连接池
+        gmail_expired = [
+            key for key, last_used in GMAIL_SERVICE_POOL['last_used'].items()
+            if now - last_used > GMAIL_SERVICE_POOL['timeout']
+        ]
+        for key in gmail_expired:
+            try:
+                # 关闭连接
+                GMAIL_SERVICE_POOL['connections'][key].close()
+            except Exception as e:
+                logger.error(f"关闭Gmail连接 {key} 失败: {e}")
+            del GMAIL_SERVICE_POOL['connections'][key]
+            del GMAIL_SERVICE_POOL['last_used'][key]
+        if gmail_expired:
+            logger.info(f"清理了 {len(gmail_expired)} 个过期的Gmail连接")
         
-        # 清理FastMail连接池（逐个处理，记录详细日志）
-        fastmail_keys = list(FASTMAIL_CONN_POOL['last_used'].keys())
-        for key in fastmail_keys:
-            # 计算闲置时间
-            last_used = FASTMAIL_CONN_POOL['last_used'].get(key, 0)
-            idle_time = now - last_used
-            
-            # 检查连接是否存在
-            if key not in FASTMAIL_CONN_POOL['connections']:
-                continue
-                
-            # 判断清理原因
-            is_timeout = idle_time > FASTMAIL_CONN_POOL['timeout']
-            is_invalid = not is_fastmail_conn_valid(FASTMAIL_CONN_POOL['connections'][key])
-            
-            if is_timeout or is_invalid:
-                try:
-                    # 关闭连接
-                    FASTMAIL_CONN_POOL['connections'][key].close()
-                except Exception as e:
-                    logger.error(f"关闭FastMail连接 {key} 失败: {e}")
-                
-                # 移除连接
-                del FASTMAIL_CONN_POOL['connections'][key]
-                del FASTMAIL_CONN_POOL['last_used'][key]
-                
-                # 输出详细日志（区分过期/无效原因）
-                reason = "过期的" if is_timeout else "无效的"
-                logger.info(f"[Fastmail] 清理{reason}FastMail连接 (闲置时间: {idle_time:.1f}秒)")
+        # 清理FastMail连接池
+        fastmail_expired = [
+            key for key, last_used in FASTMAIL_CONN_POOL['last_used'].items()
+            if now - last_used > FASTMAIL_CONN_POOL['timeout']
+        ]
+        for key in fastmail_expired:
+            try:
+                # 关闭连接
+                FASTMAIL_CONN_POOL['connections'][key].close()
+            except Exception as e:
+                logger.error(f"关闭FastMail连接 {key} 失败: {e}")
+            del FASTMAIL_CONN_POOL['connections'][key]
+            del FASTMAIL_CONN_POOL['last_used'][key]
+        if fastmail_expired:
+            logger.info(f"清理了 {len(fastmail_expired)} 个过期的FastMail连接")
         
-        # 每5分钟执行一次清理（300秒）
-        await asyncio.sleep(300)
-
-
+        # 每30分钟执行一次清理
+        await asyncio.sleep(1800)
 
 async def fetch_combined_receipts(event, payer_name, payee_name, count, email_type=None):
     """根据可用凭证并发获取合并的回单结果（任务隔离版本）"""
@@ -8290,21 +8194,55 @@ async def fetch_email_pay_only_payer_basic(event):
     count = 1  # 默认数量
     await _process_pay_receipt(event, None, payer_name, "", count)
 
-# ---------------------------- 启动后台清理任务 ----------------------------
+# 启动定期清理任务
 async def start_background_tasks():
-    """
-    启动所有后台缓存清理任务
-    
-    包含以下清理任务：
-    - 代付操作记录和图片缓存清理（每60秒）
-    - 任务缓存清理（每5分钟）
-    - PDF文本缓存清理（每1小时）
-    - 连接池清理（每5分钟）
-    """
-    asyncio.create_task(clean_expired_payback_cache())
-    asyncio.create_task(clean_expired_task_cache())
     asyncio.create_task(periodic_cleanup_pdf_cache())
     asyncio.create_task(periodic_cleanup_connection_pools())
+
+
+# —— 定时任务 —— #
+async def cleanup_stale_connections():
+    """定期清理连接池中的过期连接，每30分钟执行一次"""
+    # 添加启动日志，明确任务开始
+    logger.info("✅ 连接池清理任务已启动，将每30分钟检查并清理过期连接")
+    
+    while True:
+        current_time = time.time()
+        
+        # 清理Gmail连接池
+        # 使用列表复制避免迭代中修改字典引发的异常
+        for cred_type in list(GMAIL_SERVICE_POOL['connections'].keys()):
+            # 计算连接闲置时间
+            idle_time = current_time - GMAIL_SERVICE_POOL['last_used'].get(cred_type, 0)
+            
+            # 当闲置时间超过超时阈值时清理
+            if idle_time > GMAIL_SERVICE_POOL['timeout']:
+                try:
+                    # 移除连接池和最后使用时间记录
+                    del GMAIL_SERVICE_POOL['connections'][cred_type]
+                    del GMAIL_SERVICE_POOL['last_used'][cred_type]
+                    logger.info(f"[Gmail] 清理过期的Gmail连接 (闲置时间: {idle_time:.1f}秒)")
+                except Exception as e:
+                    logger.warning(f"清理Gmail连接 {cred_type} 失败: {str(e)}")
+        
+        # 清理FastMail连接池
+        for conn_key in list(FASTMAIL_CONN_POOL['connections'].keys()):
+            idle_time = current_time - FASTMAIL_CONN_POOL['last_used'].get(conn_key, 0)
+            
+            if idle_time > FASTMAIL_CONN_POOL['timeout']:
+                try:
+                    # 先关闭连接再移除记录
+                    conn = FASTMAIL_CONN_POOL['connections'][conn_key]
+                    conn.close()
+                    
+                    del FASTMAIL_CONN_POOL['connections'][conn_key]
+                    del FASTMAIL_CONN_POOL['last_used'][conn_key]
+                    logger.info(f"[Fastmail] 清理过期的FastMail连接 (闲置时间: {idle_time:.1f}秒)")
+                except Exception as e:
+                    logger.warning(f"清理FastMail连接 {conn_key} 失败: {str(e)}")
+
+        # 每30分钟检查一次（1800秒）
+        await asyncio.sleep(1800)
 
 
 
@@ -8713,6 +8651,25 @@ async def load_payback_groups():
         payback_groups.add(gid)
 
 
+async def clean_payback_cache():
+    """
+    定时清理 recent_payback_requests 中过期的 “(chat_id, order_id) => 时间戳” 条目，
+    避免与那些存放字符串 order_id 的条目混淆混淆导致类型错误。
+    """
+    while True:
+        await asyncio.sleep(60)
+        now = time.time()
+
+        to_remove = []
+        for key, val in recent_payback_requests.items():
+            # 只对 (chat_id, order_id) 这种 val 应该是数值时间戳的键值对执行过期判断
+            if isinstance(key, tuple) and len(key) == 2 and isinstance(val, (int, float)):
+                if now - val > PAYBACK_DEDUPE_INTERVAL:
+                    to_remove.append(key)
+
+        for key in to_remove:
+            recent_payback_requests.pop(key, None)
+
 async def verify_bot_user_id():
     """验证 BOT_USER_ID 是否已初始化，并返回机器人信息"""
     global BOT_USER_ID
@@ -8771,31 +8728,19 @@ async def main():
         await load_payback_groups()
         await load_group_data_on_startup()  # 合并加载加入时间和实体
         
-        # 7. 启动所有后台缓存清理任务并保存任务引用
-        # 代付操作记录和图片缓存清理（每60秒）
-        task_clean_payback = asyncio.create_task(clean_expired_payback_cache())
-        tasks.append(task_clean_payback)
-        logger.info("✅ 代付缓存定时清理已启动（每60秒清理过期的代付记录和图片）")
-        
-        # 任务缓存清理（每5分钟）
-        task_clean_task_cache = asyncio.create_task(clean_expired_task_cache())
-        tasks.append(task_clean_task_cache)
-        logger.info("✅ 任务缓存定时清理已启动（每5分钟清理过期的任务缓存）")
-        
-        # PDF文本缓存清理（每1小时）
-        task_clean_pdf = asyncio.create_task(periodic_cleanup_pdf_cache())
-        tasks.append(task_clean_pdf)
-        logger.info("✅ PDF缓存定时清理已启动（每小时清理过期的PDF文本缓存）")
-        
-        # 连接池清理（每5分钟）
-        task_cleanup_connections = asyncio.create_task(periodic_cleanup_connection_pools())
+        # 7. 启动各种定时任务并保存任务引用
+        # 添加连接池清理任务
+        task_cleanup_connections = asyncio.create_task(cleanup_stale_connections())
         tasks.append(task_cleanup_connections)
-        logger.info("✅ 连接池定时清理已启动（每5分钟清理闲置连接）")
+        
+        # 原有任务：清理代付缓存
+        task_clean_payback = asyncio.create_task(clean_payback_cache())
+        tasks.append(task_clean_payback)
         
         # 8. 启动订单号缓存清理任务
         task_clean_orders = asyncio.create_task(GroupJoinTimeManager.cleanup_expired_orders())
         tasks.append(task_clean_orders)
-        logger.info("✅ 单号缓存定时清理已启动（每60秒清理过期的订单号记录）")
+        logger.info("✅ 单号缓存定时清理已启动（60秒清理一次过期记录）")
         
         # 9. 启动其他定时清理任务并获取等待时间
         seconds_until_midnight = await start_scheduled_tasks()
@@ -8816,7 +8761,6 @@ async def main():
                 except asyncio.CancelledError:
                     logger.info(f"任务 {task.get_name()} 已成功取消")
         logger.info("所有任务已清理，程序退出")
-
     
 
 
